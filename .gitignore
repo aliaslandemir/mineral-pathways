@@ -1,9 +1,22 @@
 # Python
 __pycache__/
-*.pyc
+*.py[cod]
+*.pyd
+.pytest_cache/
+.coverage
+htmlcov/
 
-# Virtual environment
+# Environments and tooling
+.venv/
 venv/
+.idea/
+.vscode/
 
-# OS
+# Generated model artifacts
+output/
+results/
+
+# OS and editor files
 .DS_Store
+Thumbs.db
+*~
