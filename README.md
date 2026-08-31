@@ -1,146 +1,105 @@
-# ACP-to-Apatite Model
+# ACP-to-HAP Model
 
-Reduced-order Python model of amorphous calcium phosphate (ACP)-like precursor
-formation and maturation into apatite-like mineral under repeated medium-renewal
-cycles.
+Competing-pathway model for osteogenic culture mineralization. The code
+separates matrix-associated mineralization from solution-driven calcium
+phosphate deposition and generates the analysis tables and manuscript figures.
 
-## Repository Layout
-
-- `main.py` runs the primary stochastic model workflow and exports the main
-  figure set.
-- `src/` contains the supported model, sampling, plotting, calibration,
-  validation, and sensitivity workflows.
-- `src/old/` preserves retired exploratory scripts for reference only.
-- `output/` is generated at runtime and is ignored by Git.
-
-## Installation
-
-Run commands from the repository root:
+## Install
 
 ```bash
-python3 -m venv .venv
+python -m venv .venv
 source .venv/bin/activate
-python3 -m pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
-## Main Figure Workflow
+## Default Run
+
+Run from the repository root:
 
 ```bash
 python main.py \
-    --t-end 30 \
-    --dt 0.05 \
-    --media-interval 2 \
-    --media-renewal-fraction 1 \
-    --n-runs 100 \
-    --jobs 6 \
-    --random-seed 42 \
-    --solver-method RK45 \
-    --solver-rtol 1e-6 \
-    --solver-atol 1e-9 \
-    --C-ext 1.8018 \
-    --P-ext 0.906 \
-    --beta-GP 10.0 \
-    --eta-48h 0.22 \
-    --alpha 3 \
-    --beta 2 \
-    --n 1 \
-    --K-A 18.0 \
-    --r-A-min 1.20 \
-    --r-A-max 1.49 \
-    --r-H-min 1.50 \
-    --r-H-max 1.67 \
-    --Xi 1.0 \
-    --k-f 1.0 \
-    --M-max 2.0 \
-    --k-m 0.2 \
-    --a-AA0 0.28 \
-    --t-AA-half-life 24.0 \
-    --t-AA-half-life-levels 6,12,18,24,36,48,72 \
-    --beta-GP-levels 0,1,2,3,4,5,7.5,10,15,20 \
-    --M-max-levels 1,2,3,4,6,8 \
-    --eta-48h-levels 0.05,0.10,0.18,0.22,0.25,0.33,0.40,0.50,0.65 \
-    --K-A-levels 8,10,12,15,18,20,22,24 \
-    --k-f-levels 0.10,0.25,0.50,0.75,1.00,1.50,2.00 \
-    --k-m-levels 0.01,0.05,0.10,0.20,0.50,1.00,2.00
+  --stages model,analysis,figures \
+  --output-dir output \
+  --figures 2-10 \
+  --formats pdf,png \
+  --grid-size 50 \
+  --sobol-base 1024 \
+  --jobs 6 \
+  --n-runs 100 \
+  --seed 42 \
+  --t-end 30 \
+  --dt 0.05 \
+  --media-interval 2 \
+  --solver-method RK45 \
+  --solver-rtol 1e-6 \
+  --solver-atol 1e-9 \
+  --C_ext 2.00 \
+  --P_ext 1.25 \
+  --beta_GP 10.0 \
+  --eta_48h 0.30 \
+  --calcium-exponent 3 \
+  --phosphate-exponent 2 \
+  --K_A 33.0 \
+  --K_Q 66.0 \
+  --k_f 2e-1 \
+  --M_max 1.0 \
+  --k_m 2e-1 \
+  --k_b 2e-1 \
+  --Q_max 1.0 \
+  --n_b 1.0 \
+  --r_A_min 1.00 \
+  --r_A_max 1.49 \
+  --r_H_min 1.50 \
+  --r_H_max 1.67
 ```
 
-This workflow writes timestamped outputs under `output/main/` and exports:
-
-- `main_fig02_soluble_ion_dynamics`
-- `main_fig03_acp_apatite_dynamics`
-- `main_fig06_endpoint_parameter_sweep`
-- `supp_fig02_formation_maturation_rates`
-- `supp_fig03_ascorbate_matrix_support_sweep`
-
-Use `--random-seed 42` for a reproducible stochastic run. Supplying
-`--random-seed` without a value generates a fresh stochastic seed.
-
-## Additional Workflows
-
-Protocol prediction heatmap:
+The same values are the defaults:
 
 ```bash
-python -m src.protocol_main_prediction_figure \
-    --dt 0.05 \
-    --figure-formats pdf,png
+python main.py
 ```
 
-Sobol global sensitivity analysis:
+`--K_H` is still accepted as a command-line alias for `--K_Q`.
+
+The workflow writes to `output/`.
+
+## Endpoint Equifinality
+
+Run the day-30 endpoint-equifinality search after the main workflow:
 
 ```bash
-python -m src.sobol_sensitivity \
-    --sobol-n-base 1024 \
-    --jobs 6 \
-    --save-figures \
-    --figure-formats pdf,png
+python -m src.endpoint_equifinality_day30 \
+  --output-dir output/extrafolder \
+  --rerun-search \
+  --n-samples 2000 \
+  --n-refine 50 \
+  --tolerance 0.02 \
+  --formats pdf,png \
+  --jobs 6
 ```
 
-ARS external consistency check:
-
-```bash
-python -m src.validation_ars \
-    --n-runs 100 \
-    --t-end 30 \
-    --dt 0.05 \
-    --media-interval 2 \
-    --k-m 0.2 \
-    --a-AA0 0.28 \
-    --t-AA-half-life 24.0 \
-    --figure-formats pdf,png
-```
-
-ARS trajectory calibration:
-
-```bash
-python -m src.calibration_ars \
-    --n-runs 100 \
-    --t-end 30 \
-    --dt 0.05 \
-    --media-interval 2 \
-    --n-starts 30 \
-    --grid-size 60 \
-    --jobs 6 \
-    --figure-formats pdf,png
-```
-
-Structural-control ablations:
-
-```bash
-python -m src.structural_controls --figure-formats pdf,png
-```
-
-## Model Notes
-
-AA2P/ascorbate decays after each medium renewal according to:
+## Outputs
 
 ```text
-a_AA(t) = a_AA0 * 2^(-24 * tau / t_AA_half_life)
+output/
+├── run_manifest.json
+├── model/
+├── analysis/
+└── figures/
 ```
 
-Here `tau` is in days and `t_AA_half_life` is in hours. Matrix support is a
-normalized saturating function of the time-dependent ascorbate concentration.
-The default half-life is 24 h, and the fixed internal half-support
-concentration is 0.14 mM.
+Generated outputs are ignored by git.
 
-All supported workflows write beneath `output/`. Generated outputs, virtual
-environments, bytecode caches, and old `results/` artifacts are ignored by Git.
+## Main Files
+
+- `main.py`: end-to-end workflow driver.
+- `src/model.py`: model states, rate laws, solver, and ensemble simulation.
+- `src/analysis.py`: summary metrics, conservation checks, and parameter diagnostics.
+- `src/figures.py`: manuscript figure generation.
+- `src/endpoint_equifinality_day30.py`: day-30 endpoint-equifinality search and figure.
+
+## Quick Check
+
+```bash
+python main.py --stages model,analysis --output-dir output/check
+```

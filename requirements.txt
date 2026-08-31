@@ -1,5 +1,4 @@
 matplotlib==3.10.9
 numpy==2.4.4
-pandas==3.0.3
 SALib==1.5.2
 scipy==1.17.1

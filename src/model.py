@@ -1,556 +1,508 @@
-from dataclasses import dataclass
-from typing import Dict, List
+"""Competing matrix/bulk calcium-phosphate model.
+
+Run from the repository root::
+
+    python -m src.model \
+    --t-end 30 \
+    --dt 0.05 \
+    --media-interval 2 \
+    --K_Q 66.0 \
+    --k_b 0.2 \
+    --Q_max 1.0 \
+    --n_b 1.0 \
+    --output output/model/baseline_trajectory.csv
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+from dataclasses import asdict, dataclass, replace
+from pathlib import Path
 
 import numpy as np
 from scipy.integrate import solve_ivp
 
-MIN_CONCENTRATION = 0.0
-MIN_K_A = 1e-9
-MIN_DENOMINATOR = 1e-12
-NEGATIVE_STATE_TOLERANCE = 1e-6
-POSTPROCESS_NEGATIVE_STATE_TOLERANCE = 1e-3
-ETA_48H = 0.22
-ETA_REFERENCE_DAYS = 2.0
-K_HYD = -np.log1p(-ETA_48H) / ETA_REFERENCE_DAYS
-ASCORBATE_HALF_SUPPORT = 0.14
+
+EPS = 1.0e-12
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+NEW_MODEL_DIR = PROJECT_ROOT
+DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "output"
+FIXED_MODEL_ASSUMPTIONS = {
+    "hydrolysis_law": "J_hyd = k_hyd * B",
+    "eta_48h_reference_interval_day": 2.0,
+    "renewal_fraction": 1.0,
+    "matrix_index": "S_A = C^x * P^y / K_A",
+    "solution_index": "S_Q = C^x * P^y / K_Q",
+    "matrix_law": "R_f = k_f * [S_A - 1]_+ * [M_max - (A + H)]_+",
+    "maturation_law": "R_m = k_m * A",
+    "solution_law": "R_b = k_b * [S_Q - 1]_+^n_b * [Q_max - Q]_+",
+    "cli_alias": "--K_H is accepted as a command-line alias for K_Q",
+}
+
+
+def resolve_output_path(path: Path) -> Path:
+    """Resolve relative output paths from the repository root."""
+    return path if path.is_absolute() else PROJECT_ROOT / path
+
+
+@dataclass(frozen=True)
+class ModelParameters:
+    """Physical and phenomenological parameters in the revised manuscript."""
+
+    C_ext: float = 2.00
+    P_ext: float = 1.25
+    B_ext: float = 10.0
+    eta_48h: float = 0.30
+    x: float = 3.0
+    y: float = 2.0
+    K_A: float = 33.0
+    K_Q: float = 66.0
+    k_f: float = 0.2
+    M_max: float = 1.0
+    k_m: float = 0.2
+    k_b: float = 0.2
+    Q_max: float = 1.0
+    n_b: float = 1.0
+    r_A: float = 1.245
+    r_H: float = 1.585
+
+    @property
+    def k_hyd(self) -> float:
+        """First-order hydrolysis rate corresponding to ``eta_48h``."""
+        return -np.log1p(-self.eta_48h) / 2.0
+
+    @property
+    def K_H(self) -> float:
+        """Backward-compatible alias; the manuscript parameter is K_Q."""
+        return self.K_Q
+
+    def changed(self, **changes: float) -> "ModelParameters":
+        if "K_H" in changes:
+            changes = dict(changes)
+            changes["K_Q"] = changes.pop("K_H")
+        return replace(self, **changes)
+
+    def validate(self) -> None:
+        positive = {
+            "x": self.x,
+            "y": self.y,
+            "K_A": self.K_A,
+            "K_Q": self.K_Q,
+            "M_max": self.M_max,
+            "Q_max": self.Q_max,
+            "n_b": self.n_b,
+            "r_A": self.r_A,
+            "r_H": self.r_H,
+        }
+        for name, value in positive.items():
+            if value <= 0.0:
+                raise ValueError(f"{name} must be positive")
+        if self.B_ext < 0.0 or self.C_ext < 0.0 or self.P_ext < 0.0:
+            raise ValueError("External soluble concentrations must be non-negative")
+        if self.k_f < 0.0 or self.k_m < 0.0 or self.k_b < 0.0:
+            raise ValueError("k_f, k_m, and k_b must be non-negative")
+        if self.K_Q <= self.K_A:
+            raise ValueError("K_Q must be greater than K_A so solution-driven onset occurs after matrix-associated onset")
+        if not 0.0 <= self.eta_48h < 1.0:
+            raise ValueError("eta_48h must be in [0, 1)")
+        if self.r_H < self.r_A:
+            raise ValueError("r_H must be at least r_A")
+
+
+@dataclass(frozen=True)
+class SimulationSettings:
+    t_end: float = 30.0
+    dt: float = 0.05
+    media_interval: float = 2.0
+    method: str = "RK45"
+    rtol: float = 1.0e-6
+    atol: float = 1.0e-9
+
+    def validate(self) -> None:
+        if self.t_end <= 0.0 or self.dt <= 0.0 or self.media_interval <= 0.0:
+            raise ValueError("t_end, dt, and media_interval must be positive")
+
+
+@dataclass(frozen=True)
+class StochasticSettings:
+    n_runs: int = 100
+    seed: int = 42
+    r_A_min: float = 1.00
+    r_A_max: float = 1.49
+    r_H_min: float = 1.50
+    r_H_max: float = 1.67
+
+    def validate(self) -> None:
+        if self.n_runs < 1:
+            raise ValueError("n_runs must be at least 1")
+        if self.r_A_min <= 0.0 or self.r_A_max < self.r_A_min:
+            raise ValueError("invalid r_A range")
+        if self.r_H_min <= self.r_A_max or self.r_H_max < self.r_H_min:
+            raise ValueError("r_H range must be ordered and entirely above r_A")
 
 
 @dataclass
 class SimulationResult:
     t: np.ndarray
+    B: np.ndarray
     C: np.ndarray
     P: np.ndarray
-    B: np.ndarray
     A: np.ndarray
     H: np.ndarray
-    J_bgp: np.ndarray
-    Rf: np.ndarray
-    Rm: np.ndarray
+    Q: np.ndarray
+    J_hyd: np.ndarray
+    R_f: np.ndarray
+    R_m: np.ndarray
+    R_b: np.ndarray
     S_A: np.ndarray
-    f_MV: np.ndarray
-    f_mat: np.ndarray
-    media_days: List[float]
+    S_Q: np.ndarray
+    cycle: np.ndarray
     reset_status: np.ndarray
-    cycle_index: np.ndarray
-    cycle_start: np.ndarray
-    time_since_reset: np.ndarray
+    parameters: ModelParameters
+    settings: SimulationSettings
 
     @property
-    def dA_dt(self) -> np.ndarray:
-        return self.Rf - self.Rm
+    def M_mat(self) -> np.ndarray:
+        return self.A + self.H
 
     @property
-    def pre_reset_mask(self) -> np.ndarray:
-        return self.reset_status == "pre_reset"
+    def M_tot(self) -> np.ndarray:
+        return self.A + self.H + self.Q
 
     @property
-    def post_reset_mask(self) -> np.ndarray:
-        return self.reset_status == "post_reset"
+    def S_H(self) -> np.ndarray:
+        """Backward-compatible alias; the manuscript symbol is S_Q."""
+        return self.S_Q
 
     @property
-    def continuous_mask(self) -> np.ndarray:
-        return self.reset_status == "continuous"
+    def phosphate_inventory(self) -> np.ndarray:
+        return self.B + self.P + self.A + self.H + self.Q
+
+    @property
+    def calcium_inventory(self) -> np.ndarray:
+        p = self.parameters
+        return self.C + p.r_A * self.A + p.r_H * (self.H + self.Q)
+
+    @property
+    def matrix_formation_fraction(self) -> np.ndarray:
+        total_rate = self.R_f + self.R_b
+        return np.divide(self.R_f, total_rate, out=np.full_like(total_rate, np.nan), where=total_rate > EPS)
+
+    @property
+    def final_matrix_fraction(self) -> float:
+        return float(self.M_mat[-1] / self.M_tot[-1]) if self.M_tot[-1] > EPS else np.nan
+
+    def values_at(self, days: np.ndarray, field: str) -> np.ndarray:
+        values = np.asarray(getattr(self, field), dtype=float)
+        keep = self.reset_status != "pre_reset"
+        return np.interp(np.asarray(days, dtype=float), self.t[keep], values[keep])
+
+    def to_csv(self, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fields = [
+            "t", "B", "C", "P", "A", "H", "Q", "M_mat", "M_tot",
+            "S_A", "S_Q", "J_hyd", "R_f", "R_m", "R_b", "cycle", "reset_status",
+        ]
+        arrays = {name: getattr(self, name) for name in fields}
+        with path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(fields)
+            writer.writerows(zip(*(arrays[name] for name in fields)))
 
 
-def phosphate_release_rate(beta_gp: float, k_hyd: float = K_HYD) -> float:
-    """Reactive phosphate released from beta-GP, in mM/day."""
-    return max(float(k_hyd), 0.0) * max(float(beta_gp), 0.0)
+class MineralizationModel:
+    """Six-state ODE model with discrete medium-renewal events."""
 
+    state_names = ("B", "C", "P", "A", "H", "Q")
 
-def hydrolysis_fraction_from_rate(k_hyd: float, interval_days: float) -> float:
-    """Fraction hydrolyzed over an interval for a first-order rate constant."""
-    interval = max(float(interval_days), 0.0)
-    return float(-np.expm1(-max(float(k_hyd), 0.0) * interval))
+    def __init__(self, parameters: ModelParameters | None = None):
+        self.p = parameters or ModelParameters()
+        self.p.validate()
 
+    def formation_index(self, C: np.ndarray | float, P: np.ndarray | float) -> np.ndarray | float:
+        return np.asarray(C) ** self.p.x * np.asarray(P) ** self.p.y / self.p.K_A
 
-def hydrolysis_rate_from_fraction(fraction: float, interval_days: float) -> float:
-    """First-order rate constant equivalent to a fractional interval release."""
-    interval = float(interval_days)
-    if interval <= 0.0:
-        raise ValueError("Hydrolysis fraction interval must be positive.")
-    fraction = min(max(float(fraction), 0.0), 1.0 - MIN_DENOMINATOR)
-    return float(-np.log1p(-fraction) / interval)
+    def apatite_index(self, C: np.ndarray | float, P: np.ndarray | float) -> np.ndarray | float:
+        return self.solution_index(C, P)
 
+    def solution_index(self, C: np.ndarray | float, P: np.ndarray | float) -> np.ndarray | float:
+        return np.asarray(C) ** self.p.x * np.asarray(P) ** self.p.y / self.p.K_Q
 
-def hydrolysis_fraction_for_dt(
-    eta_48h: float,
-    dt: float,
-    reference_days: float = ETA_REFERENCE_DAYS,
-) -> float:
-    """Convert a reference hydrolysis fraction to the exact fraction over dt."""
-    return hydrolysis_fraction_from_rate(
-        hydrolysis_rate_from_fraction(eta_48h, reference_days),
-        dt,
-    )
+    def hydrolysis_rate(self, B: np.ndarray | float) -> np.ndarray | float:
+        B_value = np.maximum(np.asarray(B, dtype=float), 0.0)
+        return self.p.k_hyd * B_value
 
+    def matrix_capacity_factor(self, M_mat: np.ndarray | float) -> np.ndarray | float:
+        """Remaining matrix-associated mineralization capacity."""
+        return np.maximum(1.0 - np.asarray(M_mat, dtype=float) / self.p.M_max, 0.0)
 
-def beta_gp_hydrolysis_rate_constant(params: Dict[str, float]) -> float:
-    if "k_hyd" in params and bool(params.get("_k_hyd_explicit", False)):
-        return max(float(params["k_hyd"]), 0.0)
-    if params.get("eta_dt") is not None and bool(params.get("_eta_dt_explicit", False)):
-        return hydrolysis_rate_from_fraction(
-            float(params["eta_dt"]),
-            float(params["eta_dt_interval_days"]),
+    def matrix_free_capacity(self, M_mat: np.ndarray | float) -> np.ndarray | float:
+        return np.maximum(self.p.M_max - np.asarray(M_mat, dtype=float), 0.0)
+
+    def bulk_free_capacity(self, Q: np.ndarray | float) -> np.ndarray | float:
+        return np.maximum(self.p.Q_max - np.asarray(Q, dtype=float), 0.0)
+
+    def rates(self, state: np.ndarray, availability_dt: float | None = None) -> tuple[float, float, float, float, float, float]:
+        B, C, P, A, H, Q = np.maximum(np.asarray(state, dtype=float), 0.0)
+        S_A = float(self.formation_index(C, P))
+        S_Q = float(self.solution_index(C, P))
+        M_mat = A + H
+        matrix_capacity = float(self.matrix_free_capacity(M_mat))
+        bulk_capacity = float(self.bulk_free_capacity(Q))
+        R_f = self.p.k_f * max(S_A - 1.0, 0.0) * matrix_capacity
+        R_b = self.p.k_b * max(S_Q - 1.0, 0.0) ** self.p.n_b * bulk_capacity
+        R_m = self.p.k_m * A
+        J_hyd = float(self.hydrolysis_rate(B))
+
+        # At a depleted boundary, disable reactions that require that pool.
+        if B <= 0.0:
+            J_hyd = 0.0
+        if P <= 0.0:
+            R_f = 0.0
+            R_b = 0.0
+        if C <= 0.0:
+            R_f = 0.0
+            R_m = 0.0
+            R_b = 0.0
+        if A <= 0.0:
+            R_m = 0.0
+        if availability_dt is not None and availability_dt > 0.0:
+            p_consumption = R_f + R_b
+            c_consumption = self.p.r_A * R_f + (self.p.r_H - self.p.r_A) * R_m + self.p.r_H * R_b
+            scale = 1.0
+            if p_consumption > 0.0:
+                scale = min(scale, P / (p_consumption * availability_dt))
+            if c_consumption > 0.0:
+                scale = min(scale, C / (c_consumption * availability_dt))
+            if scale < 1.0:
+                R_f *= scale
+                R_m *= scale
+                R_b *= scale
+        return J_hyd, R_f, R_m, R_b, S_A, S_Q
+
+    def rhs(self, t: float, state: np.ndarray, cycle_start: float, availability_dt: float) -> np.ndarray:
+        J_hyd, R_f, R_m, R_b, _, _ = self.rates(state, availability_dt)
+        p = self.p
+        return np.array(
+            [
+                -J_hyd,
+                -p.r_A * R_f - (p.r_H - p.r_A) * R_m - p.r_H * R_b,
+                J_hyd - R_f - R_b,
+                R_f - R_m,
+                R_m,
+                R_b,
+            ]
         )
-    eta_48h = float(params.get("eta_48h", ETA_48H))
-    return hydrolysis_rate_from_fraction(eta_48h, ETA_REFERENCE_DAYS)
 
+    def simulate(self, settings: SimulationSettings | None = None) -> SimulationResult:
+        settings = settings or SimulationSettings()
+        settings.validate()
+        p = self.p
+        renewal_days = np.arange(settings.media_interval, settings.t_end, settings.media_interval)
+        endpoints = np.append(renewal_days, settings.t_end)
+        state = np.array([p.B_ext, p.C_ext, p.P_ext, 0.0, 0.0, 0.0], dtype=float)
+        segment_start = 0.0
+        times: list[np.ndarray] = []
+        states: list[np.ndarray] = []
+        cycles: list[np.ndarray] = []
+        statuses: list[np.ndarray] = []
 
-def synchronize_hydrolysis_parameters(params: Dict[str, float], dt: float, media_interval: float | None = None) -> float:
-    """Resolve equivalent first-order hydrolysis controls without changing B_ext."""
-    k_hyd = beta_gp_hydrolysis_rate_constant(params)
-    params["k_hyd"] = k_hyd
-    params["eta_48h"] = hydrolysis_fraction_from_rate(k_hyd, ETA_REFERENCE_DAYS)
-    params["eta_dt"] = hydrolysis_fraction_from_rate(k_hyd, dt)
-    params["eta_dt_interval_days"] = float(dt)
-    interval = float(params.get("media_interval", ETA_REFERENCE_DAYS) if media_interval is None else media_interval)
-    params["beta_GP_cycle"] = max(float(params["beta_GP"]), 0.0)
-    params["beta_GP_cycle_release"] = params["beta_GP_cycle"] * hydrolysis_fraction_from_rate(k_hyd, interval)
-    return k_hyd
+        for cycle_index, segment_end in enumerate(endpoints):
+            n_points = max(2, int(np.ceil((segment_end - segment_start) / settings.dt)) + 1)
+            t_eval = np.linspace(segment_start, segment_end, n_points)
+            solution = solve_ivp(
+                self.rhs,
+                (segment_start, segment_end),
+                state,
+                args=(segment_start, settings.dt),
+                t_eval=t_eval,
+                method=settings.method,
+                rtol=settings.rtol,
+                atol=settings.atol,
+                max_step=settings.dt,
+            )
+            if not solution.success:
+                raise RuntimeError(solution.message)
+            segment_t = solution.t if not times else solution.t[1:]
+            segment_y = solution.y if not states else solution.y[:, 1:]
+            if np.min(segment_y) < -1.0e-4:
+                raise RuntimeError(f"ODE solution left the physical state domain: minimum={np.min(segment_y):.3g}")
+            segment_y = np.maximum(segment_y, 0.0)
+            status = np.full(segment_t.size, "continuous", dtype=object)
+            is_renewal = np.any(np.isclose(segment_end, renewal_days))
+            if is_renewal:
+                status[-1] = "pre_reset"
+            times.append(segment_t)
+            states.append(segment_y)
+            cycles.append(np.full(segment_t.size, cycle_index, dtype=int))
+            statuses.append(status)
+            state = np.maximum(solution.y[:, -1], 0.0)
 
+            if is_renewal:
+                external = np.array([p.B_ext, p.C_ext, p.P_ext])
+                state[:3] = external
+                times.append(np.array([segment_end]))
+                states.append(state[:, None])
+                cycles.append(np.array([cycle_index + 1]))
+                statuses.append(np.array(["post_reset"], dtype=object))
+            segment_start = float(segment_end)
 
-def beta_gp_available_phosphate(params: Dict[str, float], duration_days: float | None = None) -> float:
-    duration = float(params.get("media_interval", 0.0) if duration_days is None else duration_days)
-    duration = max(duration, 0.0)
-    beta_gp = max(float(params["beta_GP"]), 0.0)
-    return beta_gp * (1.0 - np.exp(-beta_gp_hydrolysis_rate_constant(params) * duration))
-
-
-def beta_gp_cycle_phosphate(t: float, params: Dict[str, float]) -> float:
-    cycle_start = float(params.get("_cycle_start", 0.0))
-    cycle_time_value = max(0.0, float(t) - cycle_start)
-    beta_gp = max(float(params.get("beta_GP_cycle", params["beta_GP"])), 0.0)
-    k_hyd = beta_gp_hydrolysis_rate_constant(params)
-    return beta_gp * (1.0 - np.exp(-k_hyd * cycle_time_value))
-
-
-def phosphate_target(t: float, params: Dict[str, float]) -> float:
-    return params["P_ext"] + beta_gp_cycle_phosphate(t, params)
-
-
-def beta_gp_cycle_source(t: float, params: Dict[str, float]) -> float:
-    cycle_start = float(params.get("_cycle_start", 0.0))
-    cycle_time_value = max(0.0, float(t) - cycle_start)
-    beta_gp_remaining = max(float(params.get("beta_GP_cycle", params["beta_GP"])), 0.0) * np.exp(
-        -beta_gp_hydrolysis_rate_constant(params) * cycle_time_value
-    )
-    return phosphate_release_rate(beta_gp_remaining, beta_gp_hydrolysis_rate_constant(params))
-
-
-def cycle_time(t: float, params: Dict[str, float]) -> float:
-    cycle_start = float(params.get("_cycle_start", 0.0))
-    return max(0.0, t - cycle_start)
-
-
-def _validated_nonnegative(name: str, value: float, tolerance: float = NEGATIVE_STATE_TOLERANCE) -> float:
-    value = float(value)
-    if value < -tolerance:
-        raise ValueError(f"{name} is negative beyond tolerance: {value:.6g}")
-    return max(value, 0.0)
-
-
-def _validate_state_values(C: float, P: float, B: float, A: float, H: float) -> tuple[float, float, float, float, float]:
-    return (
-        _validated_nonnegative("C", C),
-        _validated_nonnegative("P", P),
-        _validated_nonnegative("B", B),
-        _validated_nonnegative("A", A),
-        _validated_nonnegative("H", H),
-    )
-
-
-def _project_nonnegative_state_array(name: str, values: np.ndarray) -> np.ndarray:
-    arr = np.asarray(values, dtype=float)
-    if not np.all(np.isfinite(arr)):
-        raise ValueError(f"{name} contains nonfinite values.")
-    min_value = float(np.min(arr))
-    if min_value < -POSTPROCESS_NEGATIVE_STATE_TOLERANCE:
-        raise ValueError(f"{name} has values below -{POSTPROCESS_NEGATIVE_STATE_TOLERANCE:g}: min={min_value:.6g}")
-    return np.maximum(arr, 0.0)
-
-
-def _project_nonnegative_state_matrix(values: np.ndarray) -> np.ndarray:
-    arr = np.asarray(values, dtype=float)
-    if not np.all(np.isfinite(arr)):
-        raise ValueError("State trajectory contains nonfinite values.")
-    min_value = float(np.min(arr))
-    if min_value < -POSTPROCESS_NEGATIVE_STATE_TOLERANCE:
-        raise ValueError(
-            f"State trajectory has values below -{POSTPROCESS_NEGATIVE_STATE_TOLERANCE:g}: min={min_value:.6g}"
+        t = np.concatenate(times)
+        trajectory = np.concatenate(states, axis=1)
+        cycle = np.concatenate(cycles)
+        reset_status = np.concatenate(statuses)
+        B, C, P, A, H, Q = trajectory
+        S_A = np.asarray(self.formation_index(C, P))
+        S_Q = np.asarray(self.solution_index(C, P))
+        J_hyd = np.asarray(self.hydrolysis_rate(B))
+        matrix_capacity = np.asarray(self.matrix_free_capacity(A + H))
+        bulk_capacity = np.asarray(self.bulk_free_capacity(Q))
+        R_f = p.k_f * np.maximum(S_A - 1.0, 0.0) * matrix_capacity
+        R_b = p.k_b * np.maximum(S_Q - 1.0, 0.0) ** p.n_b * bulk_capacity
+        R_m = np.where(C > 0.0, p.k_m * A, 0.0)
+        p_consumption = R_f + R_b
+        c_consumption = p.r_A * R_f + (p.r_H - p.r_A) * R_m + p.r_H * R_b
+        scale = np.ones_like(R_f)
+        scale = np.minimum(scale, np.divide(P, p_consumption * settings.dt, out=np.ones_like(P), where=p_consumption > 0.0))
+        scale = np.minimum(scale, np.divide(C, c_consumption * settings.dt, out=np.ones_like(C), where=c_consumption > 0.0))
+        R_f *= scale
+        R_m *= scale
+        R_b *= scale
+        return SimulationResult(
+            t, B, C, P, A, H, Q, J_hyd, R_f, R_m, R_b, S_A, S_Q,
+            cycle, reset_status, p, settings,
         )
-    return np.maximum(arr, 0.0)
+
+    def threshold_times(self) -> tuple[float, float]:
+        """Analytical early-cycle crossing times ``t_A`` and ``t_Q``."""
+        p = self.p
+        if p.C_ext <= 0.0:
+            return np.inf, np.inf
+        P_A = (p.K_A / p.C_ext**p.x) ** (1.0 / p.y)
+        P_Q = (p.K_Q / p.C_ext**p.x) ** (1.0 / p.y)
+
+        def crossing(target: float) -> float:
+            release = target - p.P_ext
+            if release <= 0.0:
+                return 0.0
+            if release >= p.B_ext or p.k_hyd <= 0.0:
+                return np.inf
+            remaining = p.B_ext - release
+            return float(-np.log(remaining / p.B_ext) / p.k_hyd)
+
+        return crossing(P_A), crossing(P_Q)
 
 
-def supersaturation(C: float, P: float, params: Dict[str, float]) -> float:
-    C = _validated_nonnegative("C", C)
-    P = _validated_nonnegative("P", P)
-    K_A = max(params["K_A"], MIN_K_A)
-    s = (C ** params["alpha"] * P ** params["beta"]) / K_A
-    return _validated_nonnegative("S_A", s)
+def sample_stoichiometries(base: ModelParameters, stochastic: StochasticSettings) -> list[ModelParameters]:
+    """Sample fixed-within-run Ca/P ratios for an ensemble."""
+    stochastic.validate()
+    rng = np.random.default_rng(stochastic.seed)
+    r_a = rng.uniform(stochastic.r_A_min, stochastic.r_A_max, stochastic.n_runs)
+    r_h = rng.uniform(stochastic.r_H_min, stochastic.r_H_max, stochastic.n_runs)
+    return [base.changed(r_A=float(a), r_H=float(h)) for a, h in zip(r_a, r_h)]
 
 
-def mv_activity(t: float, params: Dict[str, float]) -> float:
-    del t, params
-    return 1.0
+def simulate_ensemble(base: ModelParameters, settings: SimulationSettings, stochastic: StochasticSettings) -> list[SimulationResult]:
+    return [MineralizationModel(parameters).simulate(settings) for parameters in sample_stoichiometries(base, stochastic)]
 
 
-def precursor_formation(t: float, C: float, P: float, A: float, params: Dict[str, float], H: float = 0.0) -> float:
-    del t
-    S_A = supersaturation(C, P, params)
-    if S_A <= 1.0:
-        return 0.0
-
-    k_f = float(params["k_f"])
-    capacity = max(0.0, 1.0 - (max(float(A), 0.0) + max(float(H), 0.0)) / max(float(params["M_max"]), MIN_DENOMINATOR))
-    return k_f * (S_A - 1.0) ** params["n"] * capacity
-
-
-def ascorbate_concentration(params: Dict[str, float], elapsed_days: float = 0.0) -> float:
-    a_aa0_cycle = _validated_nonnegative("a_AA0", float(params["a_AA0"]))
-    half_life_days = max(float(params.get("t_AA_half_life", 24.0)) / 24.0, MIN_DENOMINATOR)
-    elapsed = max(float(elapsed_days), 0.0)
-    return float(a_aa0_cycle * np.exp(-np.log(2.0) * elapsed / half_life_days))
-
-
-def matrix_support_factor(params: Dict[str, float], elapsed_days: float = 0.0) -> float:
-    a_aa = ascorbate_concentration(params, elapsed_days)
-    a_aa0 = _validated_nonnegative("a_AA0", float(params["a_AA0"]))
-    k_mat_aa = max(float(params.get("K_mat_AA", ASCORBATE_HALF_SUPPORT)), MIN_DENOMINATOR)
-    support = a_aa / (k_mat_aa + a_aa) if a_aa > 0.0 else 0.0
-    baseline_support = a_aa0 / (k_mat_aa + a_aa0) if a_aa0 > 0.0 else 0.0
-    return support / max(baseline_support, MIN_DENOMINATOR)
+def save_ensemble(runs: list[SimulationResult], output_dir: Path) -> None:
+    """Save sampled ratios and pointwise ensemble summaries."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with (output_dir / "stoichiometry_samples.csv").open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["run", "r_A", "r_H"])
+        writer.writerows((i, run.parameters.r_A, run.parameters.r_H) for i, run in enumerate(runs))
+    fields = ("B", "C", "P", "A", "H", "Q", "M_mat", "M_tot", "S_A", "S_Q", "R_f", "R_m", "R_b")
+    with (output_dir / "trajectory_summary.csv").open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        header = ["time_day"]
+        for field in fields:
+            header.extend((f"{field}_mean", f"{field}_sd", f"{field}_q025", f"{field}_median", f"{field}_q975"))
+        writer.writerow(header)
+        arrays = {field: np.asarray([getattr(run, field) for run in runs]) for field in fields}
+        for index, time in enumerate(runs[0].t):
+            row: list[float] = [float(time)]
+            for field in fields:
+                values = arrays[field][:, index]
+                row.extend((float(np.mean(values)), float(np.std(values)), *np.quantile(values, [0.025, 0.5, 0.975])))
+            writer.writerow(row)
 
 
-def matrix_support_factor_at_time(t: float, params: Dict[str, float]) -> float:
-    return matrix_support_factor(params, cycle_time(t, params))
+def add_model_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add every model and numerical setting to an argument parser."""
+    parser.add_argument("--t-end", type=float, default=30.0, help="Simulation duration in days.")
+    parser.add_argument("--dt", type=float, default=0.05, help="Maximum solver step and recorded spacing in days.")
+    parser.add_argument("--media-interval", type=float, default=2.0, help="Time between medium renewals in days.")
+    parser.add_argument("--solver-method", dest="method", default="RK45", help="SciPy solve_ivp integration method.")
+    parser.add_argument("--solver-rtol", dest="rtol", type=float, default=1.0e-6, help="Relative ODE solver tolerance.")
+    parser.add_argument("--solver-atol", dest="atol", type=float, default=1.0e-9, help="Absolute ODE solver tolerance.")
+    parser.add_argument("--C_ext", dest="C_ext", type=float, default=2.00, help="Fresh-medium soluble calcium concentration (mM).")
+    parser.add_argument("--P_ext", dest="P_ext", type=float, default=1.25, help="Fresh-medium inorganic phosphate concentration (mM).")
+    parser.add_argument("--beta_GP", dest="B_ext", type=float, default=10.0, help="Fresh-medium beta-glycerophosphate concentration (mM).")
+    parser.add_argument("--eta_48h", dest="eta_48h", type=float, default=0.30, help="Fraction of beta-GP hydrolyzed over 48 hours.")
+    parser.add_argument("--calcium-exponent", dest="x", type=float, default=3.0, help="Calcium exponent x in S_A=C^x P^y/K_A.")
+    parser.add_argument("--phosphate-exponent", dest="y", type=float, default=2.0, help="Phosphate exponent y in S_A=C^x P^y/K_A.")
+    parser.add_argument("--K_A", dest="K_A", type=float, default=33.0, help="Operational matrix-pathway formation parameter.")
+    parser.add_argument("--K_Q", "--K_H", dest="K_Q", type=float, default=66.0, help="Operational solution-driven onset parameter K_Q; --K_H is accepted as an alias.")
+    parser.add_argument("--k_f", dest="k_f", type=float, default=0.2, help="Matrix precursor-formation rate constant (1/day).")
+    parser.add_argument("--M_max", dest="M_max", type=float, default=1.0, help="Matrix-associated mineral capacity (mM P-equivalent).")
+    parser.add_argument("--k_m", dest="k_m", type=float, default=0.2, help="ACP-like precursor maturation rate constant (1/day).")
+    parser.add_argument("--k_b", dest="k_b", type=float, default=0.2, help="Solution-driven mineral-retention coefficient (1/day).")
+    parser.add_argument("--Q_max", dest="Q_max", type=float, default=1.0, help="Retained solution-origin mineral capacity (mM P-equivalent).")
+    parser.add_argument("--n_b", dest="n_b", type=float, default=1.0, help="Solution-driven activation steepness exponent.")
 
 
-def maturation(C: float, P: float, A: float, H: float, params: Dict[str, float], t: float = 0.0) -> float:
-    C, P, _, A, H = _validate_state_values(C, P, 0.0, A, H)
-    k_m = float(params["k_m"])
-    f_mat = matrix_support_factor_at_time(t, params)
-    return k_m * A * f_mat
+def add_stochastic_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--n-runs", "--n_runs", type=int, default=100, help="Number of stochastic Ca/P-ratio realizations.")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducible Ca/P-ratio sampling.")
+    parser.add_argument("--r_A_min", dest="r_A_min", type=float, default=1.00, help="Minimum sampled ACP-like Ca/P ratio.")
+    parser.add_argument("--r_A_max", dest="r_A_max", type=float, default=1.49, help="Maximum sampled ACP-like Ca/P ratio.")
+    parser.add_argument("--r_H_min", dest="r_H_min", type=float, default=1.50, help="Minimum sampled apatite-like Ca/P ratio.")
+    parser.add_argument("--r_H_max", dest="r_H_max", type=float, default=1.67, help="Maximum sampled apatite-like Ca/P ratio.")
 
 
-def mineralization_rhs(t: float, y: np.ndarray, params: Dict[str, float]) -> List[float]:
-    C, P, B, A, H = y
-    # Adaptive solvers may evaluate rejected trial stages slightly outside the
-    # physical domain. Do not mutate accepted states here; validate the returned
-    # trajectory after integration.
-    C = max(float(C), 0.0)
-    P = max(float(P), 0.0)
-    B = max(float(B), 0.0)
-    A = max(float(A), 0.0)
-    H = max(float(H), 0.0)
-
-    ion_activity = C ** params["alpha"] * P ** params["beta"]
-    S_A = ion_activity / params["_K_A"]
-    capacity = max(0.0, 1.0 - (A + H) / params["_M_max"])
-    Rf = params["k_f"] * (S_A - 1.0) ** params["n"] * capacity if S_A > 1.0 else 0.0
-    Rm = params["k_m"] * A * matrix_support_factor_at_time(t, params)
-    J_bgp = params["k_hyd"] * B
-    extra_C_maturation = params["r_H"] - params["r_A"]
-
-    dCdt = -params["r_A"] * Rf - extra_C_maturation * Rm
-    dPdt = J_bgp - Rf
-    dBdt = -J_bgp
-    dAdt = Rf - Rm
-    dHdt = Rm
-    # Boundary fluxes are disabled as complete reactions, preserving both
-    # elemental balances instead of clipping individual derivatives.
-    if C <= MIN_CONCENTRATION:
-        Rf = 0.0
-        Rm = 0.0
-    if P <= MIN_CONCENTRATION:
-        Rf = 0.0
-    if B <= MIN_CONCENTRATION:
-        J_bgp = 0.0
-    if A <= MIN_CONCENTRATION:
-        Rm = 0.0
-    dCdt = -params["r_A"] * Rf - extra_C_maturation * Rm
-    dPdt = J_bgp - Rf
-    dBdt = -J_bgp
-    dAdt = Rf - Rm
-    dHdt = Rm
-    return [dCdt, dPdt, dBdt, dAdt, dHdt]
+def parameters_from_args(args: argparse.Namespace, stochastic: StochasticSettings | None = None) -> ModelParameters:
+    names = set(asdict(ModelParameters()))
+    values = {name: value for name, value in vars(args).items() if name in names and value is not None}
+    if "K_H" in vars(args) and "K_Q" not in values:
+        values["K_Q"] = vars(args)["K_H"]
+    if stochastic is not None:
+        values["r_A"] = 0.5 * (stochastic.r_A_min + stochastic.r_A_max)
+        values["r_H"] = 0.5 * (stochastic.r_H_min + stochastic.r_H_max)
+    return ModelParameters(**values)
 
 
-def simulate(
-    params: Dict[str, float],
-    t_end: float,
-    dt: float,
-    media_interval: float,
-) -> SimulationResult:
-    params = dict(params)
-    params["media_interval"] = float(media_interval)
-    params["media_renewal_fraction"] = min(max(float(params.get("media_renewal_fraction", 1.0)), 0.0), 1.0)
-    params.setdefault("eta_48h", ETA_48H)
-    synchronize_hydrolysis_parameters(params, dt, media_interval)
-    params["k_f"] = float(params["k_f"])
-    params["M_max"] = max(float(params["M_max"]), MIN_DENOMINATOR)
-    params["_K_A"] = max(float(params["K_A"]), MIN_K_A)
-    params["_M_max"] = params["M_max"]
-    params["r_H"] = float(max(params["r_H"], params["r_A"]))
-    media_days = list(np.arange(media_interval, t_end, media_interval))
-    breakpoints = media_days + [t_end]
-
-    y = np.array(
-        [
-            max(float(params["C_ext"]), 0.0),
-            max(float(params["P_ext"]), 0.0),
-            max(float(params["beta_GP"]), 0.0),
-            0.0,
-            0.0,
-        ],
-        dtype=float,
-    )
-    t0 = 0.0
-    times_all: List[np.ndarray] = []
-    states_all: List[np.ndarray] = []
-    reset_status_all: List[np.ndarray] = []
-    cycle_index_all: List[np.ndarray] = []
-    cycle_start_all: List[np.ndarray] = []
-    time_since_reset_all: List[np.ndarray] = []
-
-    for cycle_idx, t1 in enumerate(breakpoints):
-        params["_cycle_start"] = t0
-        params["_cycle_length"] = t1 - t0
-        n_steps = max(2, int(np.ceil((t1 - t0) / dt)) + 1)
-        t_eval = np.linspace(t0, t1, n_steps)
-        sol = solve_ivp(
-            mineralization_rhs,
-            (t0, t1),
-            y,
-            args=(params,),
-            t_eval=t_eval,
-            method=str(params["solver_method"]),
-            rtol=float(params["solver_rtol"]),
-            atol=float(params["solver_atol"]),
-            max_step=max(float(dt), MIN_DENOMINATOR),
-        )
-        if not sol.success:
-            raise RuntimeError(sol.message)
-
-        if times_all:
-            t_segment = sol.t[1:]
-            y_segment = sol.y[:, 1:]
-        else:
-            t_segment = sol.t
-            y_segment = sol.y
-        y_segment = _project_nonnegative_state_matrix(y_segment)
-        status = np.full(t_segment.shape, "continuous", dtype=object)
-        if np.isclose(t1, media_days).any() and status.size:
-            status[-1] = "pre_reset"
-        times_all.append(t_segment)
-        states_all.append(y_segment)
-        reset_status_all.append(status)
-        cycle_index_all.append(np.full(t_segment.shape, cycle_idx, dtype=int))
-        cycle_start_all.append(np.full(t_segment.shape, t0, dtype=float))
-        time_since_reset_all.append(t_segment - t0)
-
-        y = _project_nonnegative_state_matrix(sol.y[:, -1].reshape(5, 1))[:, 0].copy()
-
-        if np.isclose(t1, media_days).any():
-            y_reset = y.copy()
-            renew = float(params["media_renewal_fraction"])
-            y_reset[0] = (1.0 - renew) * max(float(y[0]), 0.0) + renew * max(float(params["C_ext"]), 0.0)
-            y_reset[1] = (1.0 - renew) * max(float(y[1]), 0.0) + renew * max(float(params["P_ext"]), 0.0)
-            y_reset[2] = (1.0 - renew) * max(float(y[2]), 0.0) + renew * max(float(params["beta_GP"]), 0.0)
-            times_all.append(np.array([t1]))
-            states_all.append(y_reset.reshape(5, 1))
-            reset_status_all.append(np.array(["post_reset"], dtype=object))
-            cycle_index_all.append(np.array([cycle_idx + 1], dtype=int))
-            cycle_start_all.append(np.array([t1], dtype=float))
-            time_since_reset_all.append(np.array([0.0], dtype=float))
-            y = y_reset
-
-        t0 = t1
-
-    t = np.concatenate(times_all)
-    Y = np.concatenate(states_all, axis=1)
-    C, P, B, A, H = Y
-    C = _project_nonnegative_state_array("C", C)
-    P = _project_nonnegative_state_array("P", P)
-    B = _project_nonnegative_state_array("B", B)
-    A = _project_nonnegative_state_array("A", A)
-    H = _project_nonnegative_state_array("H", H)
-    reset_status = np.concatenate(reset_status_all)
-    cycle_index = np.concatenate(cycle_index_all)
-    cycle_start = np.concatenate(cycle_start_all)
-    time_since_reset = np.concatenate(time_since_reset_all)
-
-    ion_activity = C ** float(params["alpha"]) * P ** float(params["beta"])
-    S_A = np.maximum(ion_activity / params["_K_A"], 0.0)
-    J_bgp = params["k_hyd"] * B
-    capacity = np.maximum(1.0 - (A + H) / params["_M_max"], 0.0)
-    Rf = params["k_f"] * np.maximum(S_A - 1.0, 0.0) ** float(params["n"]) * capacity
-    f_MV = np.ones(len(t), dtype=float)
-    f_mat = np.array([matrix_support_factor(params, elapsed) for elapsed in time_since_reset], dtype=float)
-    Rm = float(params["k_m"]) * A * f_mat
-    sim = SimulationResult(
-        t=t,
-        C=C,
-        P=P,
-        B=B,
-        A=A,
-        H=H,
-        J_bgp=J_bgp,
-        Rf=Rf,
-        Rm=Rm,
-        S_A=S_A,
-        f_MV=f_MV,
-        f_mat=f_mat,
-        media_days=media_days,
-        reset_status=reset_status,
-        cycle_index=cycle_index,
-        cycle_start=cycle_start,
-        time_since_reset=time_since_reset,
-    )
-    validate_simulation_state(sim)
-    return sim
+def settings_from_args(args: argparse.Namespace) -> SimulationSettings:
+    return SimulationSettings(args.t_end, args.dt, args.media_interval, args.method, args.rtol, args.atol)
 
 
-def cycle_aware_trapezoid(y: np.ndarray, t: np.ndarray, cycle_index: np.ndarray) -> float:
-    total = 0.0
-    for cycle in np.unique(cycle_index):
-        mask = cycle_index == cycle
-        if np.count_nonzero(mask) > 1:
-            total += float(np.trapezoid(np.asarray(y)[mask], np.asarray(t)[mask]))
-    return total
+def stochastic_from_args(args: argparse.Namespace) -> StochasticSettings:
+    return StochasticSettings(args.n_runs, args.seed, args.r_A_min, args.r_A_max, args.r_H_min, args.r_H_max)
 
 
-def first_threshold_crossing_time(result: SimulationResult) -> float:
-    for cycle in np.unique(result.cycle_index):
-        idx = np.where(result.cycle_index == cycle)[0]
-        idx = idx[result.reset_status[idx] != "post_reset"]
-        s = result.S_A[idx]
-        t = result.t[idx]
-        above = np.where(s >= 1.0)[0]
-        if above.size == 0:
-            continue
-        j = int(above[0])
-        if j == 0:
-            return float(t[j])
-        s0, s1 = float(s[j - 1]), float(s[j])
-        t0, t1 = float(t[j - 1]), float(t[j])
-        if np.isclose(s1, s0):
-            return t1
-        return float(t0 + (1.0 - s0) * (t1 - t0) / (s1 - s0))
-    return float("nan")
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Run the six-state competing-pathway model.", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    add_model_arguments(parser)
+    add_stochastic_arguments(parser)
+    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT_DIR / "model" / "baseline_trajectory.csv")
+    return parser
 
 
-def analytical_baseline_quantities(params: Dict[str, float], media_interval: float) -> Dict[str, float]:
-    params = dict(params)
-    params["media_interval"] = float(media_interval)
-    q_pi = beta_gp_available_phosphate(params, media_interval)
-    c_ext = max(float(params["C_ext"]), MIN_DENOMINATOR)
-    p_crit = (float(params["K_A"]) / c_ext ** float(params["alpha"])) ** (1.0 / float(params["beta"]))
-    q_pi_crit = p_crit - float(params["P_ext"])
-    k_hyd = beta_gp_hydrolysis_rate_constant(params)
-    beta_gp = max(float(params["beta_GP"]), 0.0)
-    j_beta_gp_initial = phosphate_release_rate(beta_gp, k_hyd)
-    if beta_gp > MIN_DENOMINATOR and 0.0 < q_pi_crit < beta_gp:
-        t_onset = -np.log1p(-q_pi_crit / beta_gp) / k_hyd if k_hyd > MIN_DENOMINATOR else float("nan")
-    elif q_pi_crit <= 0.0:
-        t_onset = 0.0
-    else:
-        t_onset = float("nan")
-    return {
-        "q_Pi": float(q_pi),
-        "P_crit": float(p_crit),
-        "q_Pi_crit": float(q_pi_crit),
-        "J_betaGP": float(j_beta_gp_initial),
-        "k_hyd": float(k_hyd),
-        "t_onset": float(t_onset),
-    }
+def main() -> None:
+    args = build_parser().parse_args()
+    settings = settings_from_args(args)
+    stochastic = stochastic_from_args(args)
+    parameters = parameters_from_args(args, stochastic)
+    result = MineralizationModel(parameters).simulate(settings)
+    output = resolve_output_path(args.output)
+    result.to_csv(output)
+    runs = simulate_ensemble(parameters, settings, stochastic)
+    save_ensemble(runs, output.parent)
+    print(f"Saved {output}")
+    print(f"Final M_mat={result.M_mat[-1]:.6g}, Q={result.Q[-1]:.6g}, M_tot={result.M_tot[-1]:.6g}")
 
 
-def validate_simulation_state(result: SimulationResult, tolerance: float = NEGATIVE_STATE_TOLERANCE) -> None:
-    arrays = {
-        "C": result.C,
-        "P": result.P,
-        "B": result.B,
-        "A": result.A,
-        "H": result.H,
-        "J_bgp": result.J_bgp,
-        "R_f": result.Rf,
-        "R_m": result.Rm,
-    }
-    for name, values in arrays.items():
-        arr = np.asarray(values, dtype=float)
-        if not np.all(np.isfinite(arr)):
-            raise ValueError(f"{name} contains nonfinite values.")
-        min_value = float(np.min(arr))
-        if min_value < -tolerance:
-            raise ValueError(f"{name} has values below -{tolerance:g}: min={min_value:.6g}")
-
-
-def regime_metrics(result: SimulationResult) -> Dict[str, float | str]:
-    eps = MIN_DENOMINATOR
-    auc_a = cycle_aware_trapezoid(result.A, result.t, result.cycle_index)
-    auc_h = cycle_aware_trapezoid(result.H, result.t, result.cycle_index)
-    int_rf = cycle_aware_trapezoid(result.Rf, result.t, result.cycle_index)
-    int_rm = cycle_aware_trapezoid(result.Rm, result.t, result.cycle_index)
-    fraction_supersaturated = float(np.mean(result.S_A > 1.0))
-
-    onset_time = first_threshold_crossing_time(result)
-    h_threshold = 0.05 * float(np.max(result.H))
-    h_idx = np.where(result.H >= h_threshold)[0]
-    h_onset = float(result.t[h_idx[0]]) if h_threshold > 0.0 and len(h_idx) else float("nan")
-
-    rf_mean = float(np.mean(result.Rf))
-    pulse_index = float(np.std(result.Rf) / max(rf_mean, eps)) if rf_mean > eps else 0.0
-    integrated_maturation_fraction = int_rm / max(int_rf, eps)
-
-    if fraction_supersaturated < 0.25:
-        regime = "phosphate_or_supersaturation_limited"
-    elif int_rf <= eps:
-        regime = "nucleation_limited"
-    elif integrated_maturation_fraction < 0.5 and auc_a > auc_h:
-        regime = "maturation_limited"
-    elif pulse_index > 1.0:
-        regime = "pulse_driven"
-    else:
-        regime = "apatite_growth"
-
-    return {
-        "fraction_time_supersaturated": fraction_supersaturated,
-        "onset_time_SA_days": onset_time,
-        "onset_time_H_days": h_onset,
-        "AUC_A": auc_a,
-        "AUC_H": auc_h,
-        "integral_Rf": int_rf,
-        "integral_Rm": int_rm,
-        "maturation_ratio": integrated_maturation_fraction,
-        "integrated_maturation_fraction": integrated_maturation_fraction,
-        "pulse_index": pulse_index,
-        "regime": regime,
-    }
-
-
-def transient_metrics(result: SimulationResult) -> Dict[str, float]:
-    peak_idx = int(np.argmax(result.A))
-    A_peak = float(result.A[peak_idx])
-    t_peak = float(result.t[peak_idx])
-    A_final = float(result.A[-1])
-    H_final = float(result.H[-1])
-    phi_H_final = H_final / (A_final + H_final) if A_final + H_final > MIN_DENOMINATOR else float("nan")
-    post_peak_A = result.A[peak_idx:]
-    A_post_peak_min = float(np.min(post_peak_A)) if len(post_peak_A) else A_final
-    decline_fraction = float((A_peak - A_post_peak_min) / A_peak) if A_peak > 0 else np.nan
-    H_after_peak = float(result.H[-1] - result.H[peak_idx])
-    metrics = {
-        "A_peak": A_peak,
-        "t_peak_days": t_peak,
-        "global_A_peak": A_peak,
-        "global_A_peak_time": t_peak,
-        "global_A_peak_time_endpoint_dependent": t_peak,
-        "A_final": A_final,
-        "phi_H_final": phi_H_final,
-        "A_post_peak_min": A_post_peak_min,
-        "decline_fraction": decline_fraction,
-        "H_final": H_final,
-        "H_after_peak": H_after_peak,
-    }
-    metrics.update(regime_metrics(result))
-    return metrics
+if __name__ == "__main__":
+    main()
