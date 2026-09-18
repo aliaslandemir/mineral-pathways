@@ -75,12 +75,15 @@ COLORS = {
 def configure_style() -> None:
     plt.rcParams.update(
         {
-            "font.size": 9,
-            "axes.labelsize": 9.5,
-            "axes.titlesize": 10,
-            "legend.fontsize": 8,
+            "font.size": 12,
+            "axes.labelsize": 13,
+            "axes.titlesize": 14,
+            "xtick.labelsize": 11,
+            "ytick.labelsize": 11,
+            "legend.fontsize": 11,
+            "legend.title_fontsize": 12,
             "figure.dpi": 150,
-            "savefig.dpi": 300,
+            "savefig.dpi": 600,
             "axes.spines.top": False,
             "axes.spines.right": False,
         }
@@ -102,7 +105,7 @@ def save_named_figure(fig: plt.Figure, output_dir: Path, stem: str, formats: tup
 
 
 def panel_label(ax: plt.Axes, label: str) -> None:
-    ax.text(-0.12, 1.04, label, transform=ax.transAxes, fontsize=11, fontweight="bold")
+    ax.text(-0.16, 1.04, label, transform=ax.transAxes, fontsize=15, fontweight="bold")
 
 
 def add_renewals(ax: plt.Axes, settings: SimulationSettings) -> None:
@@ -112,7 +115,7 @@ def add_renewals(ax: plt.Axes, settings: SimulationSettings) -> None:
 
 def figure_02(output_dir: Path, formats: tuple[str, ...], parameters: ModelParameters, settings: SimulationSettings, ensemble_runs: list[SimulationResult] | None = None, **_: object) -> None:
     result = MineralizationModel(parameters).simulate(settings)
-    fig, axes = plt.subplots(4, 1, figsize=(8.2, 9.0), sharex=True)
+    fig, axes = plt.subplots(4, 1, figsize=(8.8, 11.2), sharex=True)
     axes[0].plot(result.t, result.C, color=COLORS["C"], label="Calcium C")
     axes[0].plot(result.t, result.P, color=COLORS["P"], label="Phosphate P")
     if ensemble_runs:
@@ -151,7 +154,7 @@ def figure_02(output_dir: Path, formats: tuple[str, ...], parameters: ModelParam
         panel_label(ax, label)
         add_renewals(ax, settings)
     fig.suptitle("Baseline soluble-ion and retained-mineral dynamics")
-    fig.tight_layout()
+    fig.tight_layout(rect=(0.04, 0.02, 0.99, 0.965), h_pad=2.4)
     save_figure(fig, output_dir, 2, formats)
     result.to_csv(output_dir / "fig02_baseline_trajectory.csv")
 
@@ -207,7 +210,7 @@ def figure_03(output_dir: Path, formats: tuple[str, ...], parameters: ModelParam
     finite_fraction = np.isfinite(matrix_fraction)
     if np.any(finite_fraction) and np.nanmin(matrix_fraction) <= 0.5 <= np.nanmax(matrix_fraction):
         axes[1].contour(endpoint_beta, endpoint_intervals, matrix_fraction, levels=[0.5], colors="#303030", linewidths=1.0)
-    fig.colorbar(im1, ax=axes[1], label="Matrix-associated fraction, $(A+H)/(A+H+Q)$")
+    fig.colorbar(im1, ax=axes[1], label="Matrix fraction, $M_{mat}/M_{tot}$")
     for ax in axes:
         ax.scatter(parameters.B_ext, settings.media_interval, marker="*", s=130, c="white", edgecolors="black", zorder=5)
         ax.set_xlabel("β-GP (mM)")
@@ -346,8 +349,8 @@ def figure_06(output_dir: Path, formats: tuple[str, ...], parameters: ModelParam
             sweep_rows.append([name, value, result.A[-1], result.H[-1], result.Q[-1], result.M_mat[-1], result.M_tot[-1], result.final_matrix_fraction, np.max(result.S_A)])
         ax.set_title(title)
         ax.set_xlabel("Time (day)")
-        ax.set_ylabel("$M_{mat}=A+H$ (mM P-eq.)")
-        ax.legend(title=title)
+        ax.set_ylabel("$M_{mat}$ (mM P-eq.)")
+        ax.legend(title=title, loc="center right", bbox_to_anchor=(0.98, 0.5), frameon=True, framealpha=0.88)
         panel_label(ax, label)
     fig.suptitle("Parameter effects on matrix-associated mineral accumulation")
     fig.tight_layout()
@@ -587,7 +590,7 @@ def figure_09(output_dir: Path, formats: tuple[str, ...], parameters: ModelParam
         panel_label(ax, label)
     axes[0].set_title("Alizarin Red mineralization")
     axes[1].set_title("Raman apatite signal")
-    fig.suptitle("Comparison with published mineralization time courses")
+    fig.suptitle("Comparison with published mineralization data")
     fig.tight_layout()
     save_figure(fig, output_dir, 9, formats)
 
@@ -636,7 +639,7 @@ def figure_11(output_dir: Path, formats: tuple[str, ...], parameters: ModelParam
     window = np.asarray([row["matrix_window_day"] for row in simulated], dtype=float)
 
     fig, axes = plt.subplots(1, 3, figsize=(13.0, 4.0))
-    baseline_ratio = 2.4
+    baseline_ratio = parameters.K_Q / parameters.K_A
 
     axes[0].plot(ratios, M_mat, "-o", color=COLORS["matrix"], label="$M_{mat}=A+H$")
     axes[0].plot(ratios, Q, "-s", color=COLORS["Q"], label="$Q$")

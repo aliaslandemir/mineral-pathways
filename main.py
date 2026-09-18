@@ -1,4 +1,44 @@
-"""Run the model, analysis, and figure workflow."""
+"""
+
+python main.py \
+  --stages model,analysis,figures \
+  --output-dir output \
+  --figures 2-11 \
+  --formats pdf,png \
+  --grid-size 50 \
+  --sobol-base 1024 \
+  --jobs 6 \
+  --n-runs 100 \
+  --seed 42 \
+  --t-end 30 \
+  --dt 0.05 \
+  --media-interval 2 \
+  --solver-method RK45 \
+  --solver-rtol 1e-6 \
+  --solver-atol 1e-9 \
+  --C_ext 2.00 \
+  --P_ext 1.25 \
+  --beta_GP 10.0 \
+  --eta_48h 0.30 \
+  --calcium-exponent 3 \
+  --phosphate-exponent 2 \
+  --K_A 33.0 \
+  --K_Q 66.0 \
+  --k_f 2e-1 \
+  --M_max 1.0 \
+  --k_m 2e-1 \
+  --k_b 2e-1 \
+  --Q_max 1.0 \
+  --n_b 1.0 \
+  --r_A_min 1.00 \
+  --r_A_max 1.49 \
+  --r_H_min 1.50 \
+  --r_H_max 1.67
+
+"""
+
+
+
 
 from __future__ import annotations
 

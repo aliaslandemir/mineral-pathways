@@ -20,7 +20,7 @@ Run from the repository root:
 python main.py \
   --stages model,analysis,figures \
   --output-dir output \
-  --figures 2-10 \
+  --figures 2-11 \
   --formats pdf,png \
   --grid-size 50 \
   --sobol-base 1024 \
@@ -65,10 +65,10 @@ The workflow writes to `output/`.
 
 ## Endpoint Equifinality
 
-Run the day-30 endpoint-equifinality search after the main workflow:
+Run the day-28 endpoint-equifinality search after the main workflow:
 
 ```bash
-python -m src.endpoint_equifinality_day30 \
+python -m src.endpoint_equifinality_day28 \
   --output-dir output/extrafolder \
   --rerun-search \
   --n-samples 2000 \
@@ -96,7 +96,7 @@ Generated outputs are ignored by git.
 - `src/model.py`: model states, rate laws, solver, and ensemble simulation.
 - `src/analysis.py`: summary metrics, conservation checks, and parameter diagnostics.
 - `src/figures.py`: manuscript figure generation.
-- `src/endpoint_equifinality_day30.py`: day-30 endpoint-equifinality search and figure.
+- `src/endpoint_equifinality_day28.py`: day-28 endpoint-equifinality search and figure.
 
 ## Quick Check
 

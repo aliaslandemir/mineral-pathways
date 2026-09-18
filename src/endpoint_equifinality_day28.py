@@ -1,8 +1,8 @@
-"""Endpoint-equifinality analysis for final day-30 mineral.
+"""Endpoint-equifinality analysis for final day-28 mineral.
 
 Run from the repository root:
 
-    python -m src.endpoint_equifinality_day30 \
+    python -m src.endpoint_equifinality_day28 \
       --output-dir output/extrafolder \
       --rerun-search \
       --n-samples 2000 \
@@ -40,9 +40,7 @@ from src.model import (
     MineralizationModel,
     ModelParameters,
     SimulationSettings,
-    parameters_from_args,
     resolve_output_path,
-    settings_from_args,
 )
 
 
@@ -99,6 +97,7 @@ BASELINE_VALUES = {
     "Q_max": 1.0,
 }
 DEFAULT_EXTRA_OUTPUT_DIR = DEFAULT_OUTPUT_DIR / "extrafolder"
+ENDPOINT_DAY = 28.0
 
 
 def configure_style() -> None:
@@ -135,22 +134,22 @@ def endpoint_from_changes(task: tuple[dict[str, float], dict[str, float], Simula
         result = MineralizationModel(params).simulate(settings)
     except (RuntimeError, ValueError, FloatingPointError) as exc:
         row: dict[str, float | str] = {CSV_NAMES.get(name, name): float(changes[name]) for name in FREE_PARAMETERS}
-        row.update({"status": str(exc), "Mmat_30": np.nan, "Q_30": np.nan, "Mtot_30": np.nan, "relative_error": np.inf, "fmat_30": np.nan})
+        row.update({"status": str(exc), "Mmat_28": np.nan, "Q_28": np.nan, "Mtot_28": np.nan, "relative_error": np.inf, "fmat_28": np.nan})
         return row
     mtot = float(result.M_tot[-1])
     mmat = float(result.M_mat[-1])
-    q_30 = float(result.Q[-1])
+    q_28 = float(result.Q[-1])
     row = {CSV_NAMES.get(name, name): float(changes[name]) for name in FREE_PARAMETERS}
     row.update(
         {
             "status": "accepted" if abs(mtot - baseline_mtot) / max(abs(baseline_mtot), EPS) <= 0.02 else "sampled",
-            "A_30": float(result.A[-1]),
-            "H_30": float(result.H[-1]),
-            "Mmat_30": mmat,
-            "Q_30": q_30,
-            "Mtot_30": mtot,
+            "A_28": float(result.A[-1]),
+            "H_28": float(result.H[-1]),
+            "Mmat_28": mmat,
+            "Q_28": q_28,
+            "Mtot_28": mtot,
             "relative_error": abs(mtot - baseline_mtot) / max(abs(baseline_mtot), EPS),
-            "fmat_30": mmat / mtot if mtot > EPS else np.nan,
+            "fmat_28": mmat / mtot if mtot > EPS else np.nan,
         }
     )
     return row
@@ -240,14 +239,14 @@ def save_accepted_csv(path: Path, rows: list[dict[str, float | str]], baseline_m
         "M_mat_max",
         "k_b",
         "Q_max",
-        "A_30",
-        "H_30",
-        "Mmat_30",
-        "Q_30",
-        "Mtot_30",
+        "A_28",
+        "H_28",
+        "Mmat_28",
+        "Q_28",
+        "Mtot_28",
         "relative_error",
-        "fmat_30",
-        "baseline_Mtot_30",
+        "fmat_28",
+        "baseline_Mtot_28",
         "status",
     ]
     with path.open("w", newline="", encoding="utf-8") as handle:
@@ -255,7 +254,7 @@ def save_accepted_csv(path: Path, rows: list[dict[str, float | str]], baseline_m
         writer.writeheader()
         for row in rows:
             out = {field: row.get(field, "") for field in fields}
-            out["baseline_Mtot_30"] = baseline_mtot
+            out["baseline_Mtot_28"] = baseline_mtot
             writer.writerow(out)
 
 
@@ -268,7 +267,7 @@ def generate_accepted_sets(
     tolerance: float,
 ) -> tuple[list[dict[str, float | str]], float]:
     params = ModelParameters()
-    settings = SimulationSettings()
+    settings = SimulationSettings(t_end=ENDPOINT_DAY)
     baseline = MineralizationModel(params).simulate(settings)
     baseline_mtot = float(baseline.M_tot[-1])
     base_values = asdict(params)
@@ -282,7 +281,7 @@ def generate_accepted_sets(
             "increase --n-samples, increase --n-refine, or relax --tolerance."
         )
 
-    accepted.sort(key=lambda row: float(row["fmat_30"]))
+    accepted.sort(key=lambda row: float(row["fmat_28"]))
     save_accepted_csv(output_dir / "accepted_endpoint_equifinal_sets.csv", accepted, baseline_mtot)
     return accepted, baseline_mtot
 
@@ -297,7 +296,7 @@ def load_accepted_csv(path: Path) -> list[dict[str, float | str]]:
 
 def accepted_csv_matches_current_baseline(rows: list[dict[str, float | str]], baseline_mtot: float) -> bool:
     try:
-        csv_baseline_mtot = float(rows[0]["baseline_Mtot_30"])
+        csv_baseline_mtot = float(rows[0]["baseline_Mtot_28"])
     except (KeyError, TypeError, ValueError):
         return False
     return abs(csv_baseline_mtot - baseline_mtot) / max(abs(baseline_mtot), EPS) <= 1.0e-6
@@ -309,7 +308,7 @@ def normalized_parameter_values(rows: list[dict[str, float | str]], name: str) -
 
 def baseline_endpoint_row() -> dict[str, float | str]:
     params = ModelParameters()
-    settings = SimulationSettings()
+    settings = SimulationSettings(t_end=ENDPOINT_DAY)
     result = MineralizationModel(params).simulate(settings)
     mtot = float(result.M_tot[-1])
     mmat = float(result.M_mat[-1])
@@ -322,19 +321,19 @@ def baseline_endpoint_row() -> dict[str, float | str]:
         "k_b": params.k_b,
         "Q_max": params.Q_max,
         "status": "baseline",
-        "A_30": float(result.A[-1]),
-        "H_30": float(result.H[-1]),
-        "Mmat_30": mmat,
-        "Q_30": float(result.Q[-1]),
-        "Mtot_30": mtot,
+        "A_28": float(result.A[-1]),
+        "H_28": float(result.H[-1]),
+        "Mmat_28": mmat,
+        "Q_28": float(result.Q[-1]),
+        "Mtot_28": mtot,
         "relative_error": 0.0,
-        "fmat_30": mmat / mtot if mtot > EPS else np.nan,
-        "baseline_Mtot_30": mtot,
+        "fmat_28": mmat / mtot if mtot > EPS else np.nan,
+        "baseline_Mtot_28": mtot,
     }
 
 
 def representative_rows(rows: list[dict[str, float | str]], baseline_row: dict[str, float | str]) -> list[tuple[str, dict[str, float | str]]]:
-    fmat = np.asarray([float(row["fmat_30"]) for row in rows], dtype=float)
+    fmat = np.asarray([float(row["fmat_28"]) for row in rows], dtype=float)
     selected = {
         "Solution-rich": int(np.argmin(fmat)),
         "Matrix-only": int(np.argmax(fmat)),
@@ -371,8 +370,8 @@ def parameter_intervals(rows: list[dict[str, float | str]]) -> list[dict[str, fl
 
 def write_caption(path: Path) -> None:
     caption = (
-        "Endpoint equifinality at day 30. Each column represents a distinct accepted parameterization reproducing "
-        "the day-30 total retained mineral endpoint within +/-2%; the true baseline simulation is inserted at its "
+        "Endpoint equifinality at day 28. Each column represents a distinct accepted parameterization reproducing "
+        "the day-28 total retained mineral endpoint within +/-2%; the true baseline simulation is inserted at its "
         "actual matrix-associated fraction as a black reference column. Panel A shows that accepted parameterizations retain "
         "nearly the same total mineral while spanning very different matrix-associated and solution-driven pathway "
         "partitions. Panel B shows the corresponding parameter fingerprints in the same parameterization order, revealing "
@@ -382,21 +381,21 @@ def write_caption(path: Path) -> None:
 
 
 def endpoint_arrays(rows: list[dict[str, float | str]], baseline_row: dict[str, float | str]) -> dict[str, np.ndarray | float]:
-    baseline_mtot = float(baseline_row["Mtot_30"])
+    baseline_mtot = float(baseline_row["Mtot_28"])
     return {
-        "mmat": np.asarray([float(row["Mmat_30"]) for row in rows], dtype=float),
-        "q": np.asarray([float(row["Q_30"]) for row in rows], dtype=float),
-        "mtot": np.asarray([float(row["Mtot_30"]) for row in rows], dtype=float),
-        "fmat": np.asarray([float(row["fmat_30"]) for row in rows], dtype=float),
+        "mmat": np.asarray([float(row["Mmat_28"]) for row in rows], dtype=float),
+        "q": np.asarray([float(row["Q_28"]) for row in rows], dtype=float),
+        "mtot": np.asarray([float(row["Mtot_28"]) for row in rows], dtype=float),
+        "fmat": np.asarray([float(row["fmat_28"]) for row in rows], dtype=float),
         "error": np.asarray([float(row["relative_error"]) for row in rows], dtype=float),
-        "baseline_mmat": float(baseline_row["Mmat_30"]),
-        "baseline_q": float(baseline_row["Q_30"]),
+        "baseline_mmat": float(baseline_row["Mmat_28"]),
+        "baseline_q": float(baseline_row["Q_28"]),
         "baseline_mtot": baseline_mtot,
-        "baseline_fmat": float(baseline_row["fmat_30"]),
+        "baseline_fmat": float(baseline_row["fmat_28"]),
     }
 
 
-def ordered_log_parameter_matrix(rows: list[dict[str, float | str]]) -> tuple[np.ndarray, list[str], tuple[float, float]]:
+def sorted_log_parameter_matrix(rows: list[dict[str, float | str]]) -> tuple[np.ndarray, list[str], tuple[float, float]]:
     parameter_order = ("eta_48h", "K_A", "k_f", "M_mat_max", "K_Q", "k_b", "Q_max")
     matrix = np.asarray([np.log10(normalized_parameter_values(rows, name)) for name in parameter_order], dtype=float)
     labels = [CSV_DISPLAY_NAMES[name] for name in parameter_order]
@@ -412,8 +411,8 @@ def display_rows_with_baseline(
     if len(accepted_sorted) > max_accepted:
         indices = np.unique(np.linspace(0, len(accepted_sorted) - 1, max_accepted, dtype=int))
         accepted_sorted = [accepted_sorted[int(index)] for index in indices]
-    fmat_values = [float(row["fmat_30"]) for row in accepted_sorted]
-    insert_at = int(np.searchsorted(fmat_values, float(baseline_row["fmat_30"])))
+    fmat_values = [float(row["fmat_28"]) for row in accepted_sorted]
+    insert_at = int(np.searchsorted(fmat_values, float(baseline_row["fmat_28"])))
     return accepted_sorted[:insert_at] + [baseline_row] + accepted_sorted[insert_at:], insert_at
 
 
@@ -467,8 +466,8 @@ def plot_design_1(output_dir: Path, rows: list[dict[str, float | str]], formats:
         ax_a.annotate(f"{percent:.0f}% matrix", xy=(percent, endpoint_percent[index]), xytext=(percent + dx, endpoint_percent[index] + 1.05), arrowprops={"arrowstyle": "-", "color": "0.35", "linewidth": 0.7}, fontsize=7.5, color="0.15")
     ax_a.set_xlim(0.0, 103.0)
     ax_a.set_ylim(96.0, 103.0)
-    ax_a.set_xlabel("Matrix fraction at day 30 (%)")
-    ax_a.set_ylabel(r"$M_{tot,30}$ / baseline (%)")
+    ax_a.set_xlabel("Matrix fraction at day 28 (%)")
+    ax_a.set_ylabel(r"$M_{tot,28}$ / baseline (%)")
     ax_a.set_title("Endpoint band", fontweight="bold", pad=7)
 
     y = np.arange(parameter_matrix.shape[0])
@@ -495,7 +494,7 @@ def plot_design_1(output_dir: Path, rows: list[dict[str, float | str]], formats:
     panel_letter(ax_a, "A")
     panel_letter(ax_b, "B")
     fig.subplots_adjust(top=0.86, bottom=0.22, left=0.09, right=0.985)
-    save_named_figure(fig, output_dir, "endpoint_equifinality_day30_design1", formats)
+    save_named_figure(fig, output_dir, "endpoint_equifinality_day28_design1", formats)
 
 
 def plot_design_2(output_dir: Path, rows: list[dict[str, float | str]], formats: tuple[str, ...]) -> None:
@@ -543,7 +542,7 @@ def plot_design_2(output_dir: Path, rows: list[dict[str, float | str]], formats:
     ax_b.grid(False)
     panel_letter(ax_b, "B")
     fig.subplots_adjust(top=0.84, bottom=0.23, left=0.07, right=0.97)
-    save_named_figure(fig, output_dir, "endpoint_equifinality_day30_design2", formats)
+    save_named_figure(fig, output_dir, "endpoint_equifinality_day28_design2", formats)
 
 
 def plot_design_3(output_dir: Path, rows: list[dict[str, float | str]], formats: tuple[str, ...]) -> None:
@@ -574,7 +573,7 @@ def plot_design_3(output_dir: Path, rows: list[dict[str, float | str]], formats:
     ax_a.set_xlim(0.0, 1.0)
     ax_a.set_ylim(0.0, 1.08 * float(np.nanmax(total)))
     ax_a.set_xticks([0.0, 0.5, 1.0], [f"{100.0 * arrays['fmat'][order[0]]:.0f}%", "pathway continuum", f"{100.0 * arrays['fmat'][order[-1]]:.0f}%"])
-    ax_a.set_ylabel("Day-30 mineral (mM P-eq.)")
+    ax_a.set_ylabel("Day-28 mineral (mM P-eq.)")
     ax_a.set_title("Pathway stack ribbon", fontweight="bold", pad=7)
 
     parameter_x = np.arange(parameter_matrix.shape[0])
@@ -593,7 +592,7 @@ def plot_design_3(output_dir: Path, rows: list[dict[str, float | str]], formats:
     panel_letter(ax_a, "A")
     panel_letter(ax_b, "B")
     fig.subplots_adjust(top=0.86, bottom=0.26, left=0.08, right=0.985)
-    save_named_figure(fig, output_dir, "endpoint_equifinality_day30_design3", formats)
+    save_named_figure(fig, output_dir, "endpoint_equifinality_day28_design3", formats)
 
 
 def plot_figure(
@@ -606,18 +605,18 @@ def plot_figure(
 
     matrix_color = "#56B4E9"
     solution_color = "#CC79A7"
-    baseline_mtot = float(baseline_row["Mtot_30"])
+    baseline_mtot = float(baseline_row["Mtot_28"])
     parameter_order = ("eta_48h", "K_A", "k_f", "M_mat_max", "K_Q", "k_b", "Q_max")
     parameter_labels = [CSV_DISPLAY_NAMES[name] for name in parameter_order]
 
-    accepted_sorted = sorted(rows, key=lambda row: float(row["fmat_30"]))
+    accepted_sorted = sorted(rows, key=lambda row: float(row["fmat_28"]))
     column_rows, baseline_col = display_rows_with_baseline(accepted_sorted, baseline_row)
 
     x_pos = np.arange(len(column_rows))
-    mmat = np.asarray([float(row["Mmat_30"]) for row in column_rows], dtype=float)
-    q_30 = np.asarray([float(row["Q_30"]) for row in column_rows], dtype=float)
-    mtot = mmat + q_30
-    fmat = np.asarray([float(row["fmat_30"]) for row in column_rows], dtype=float)
+    mmat = np.asarray([float(row["Mmat_28"]) for row in column_rows], dtype=float)
+    q_28 = np.asarray([float(row["Q_28"]) for row in column_rows], dtype=float)
+    mtot = mmat + q_28
+    fmat = np.asarray([float(row["fmat_28"]) for row in column_rows], dtype=float)
     heatmap = np.asarray([[np.log10(float(row[name]) / BASELINE_VALUES[name]) for row in column_rows] for name in parameter_order], dtype=float)
     color_limit = max(1.0, float(np.nanmax(np.abs(heatmap))))
 
@@ -640,7 +639,7 @@ def plot_figure(
     ax_a.axhline(band_low, color="0.35", linewidth=0.75, linestyle="--", zorder=1)
     ax_a.axhline(band_high, color="0.35", linewidth=0.75, linestyle="--", zorder=1)
     ax_a.bar(x_pos, mmat, width=bar_widths, color=matrix_color, edgecolor=edge_colors, linewidth=line_widths, label="Matrix", zorder=2)
-    ax_a.bar(x_pos, q_30, bottom=mmat, width=bar_widths, color=solution_color, edgecolor=edge_colors, linewidth=line_widths, label="Solution", zorder=2)
+    ax_a.bar(x_pos, q_28, bottom=mmat, width=bar_widths, color=solution_color, edgecolor=edge_colors, linewidth=line_widths, label="Solution", zorder=2)
     ax_a.plot(x_pos, mtot, color="black", linewidth=0.75, zorder=4)
     ax_a.axhline(baseline_mtot, color="black", linewidth=0.85, zorder=3)
     ax_a.add_patch(plt.Rectangle((baseline_col - 0.53, 0.0), 1.06, mtot[baseline_col], fill=False, edgecolor="black", linewidth=1.05, zorder=5))
@@ -669,7 +668,7 @@ def plot_figure(
         borderpad=0.25,
     )
     legend.set_zorder(10)
-    ax_a.set_ylabel("Day-30 mineral\n(mM P-eq.)", labelpad=4)
+    ax_a.set_ylabel("Day-28 mineral\n(mM P-eq.)", labelpad=4)
     ax_a.set_ylim(0.0, max(float(np.nanmax(mtot)), 1.02 * baseline_mtot) * 1.12)
     ax_a.set_title("A  Mineral source", loc="left", fontweight="bold", fontsize=9.0, pad=6)
     ax_a.tick_params(axis="x", labelbottom=False, length=0)
@@ -701,12 +700,12 @@ def plot_figure(
     ax_b.xaxis.labelpad = 10
     fig.subplots_adjust(top=0.93, bottom=0.18, left=0.10, right=0.965)
 
-    save_named_figure(fig, output_dir, "endpoint_equifinality_day30", formats)
-    write_caption(output_dir / "endpoint_equifinality_day30_caption.txt")
+    save_named_figure(fig, output_dir, "endpoint_equifinality_day28", formats)
+    write_caption(output_dir / "endpoint_equifinality_day28_caption.txt")
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Day-30 endpoint identifiability figure and accepted-set export.", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser = argparse.ArgumentParser(description="Day-28 endpoint identifiability figure and accepted-set export.", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_EXTRA_OUTPUT_DIR)
     parser.add_argument("--n-samples", type=int, default=2000, help="Latin-hypercube samples inside the current Sobol bounds.")
     parser.add_argument("--n-refine", type=int, default=0, help="Optional number of best sampled starts refined by bounded endpoint optimization.")
@@ -726,25 +725,25 @@ def main() -> None:
     formats = tuple(value.strip().lower() for value in args.formats.split(",") if value.strip())
     accepted_csv = output_dir / "accepted_endpoint_equifinal_sets.csv"
 
-    baseline_mtot_current = float(baseline_endpoint_row()["Mtot_30"])
+    baseline_mtot_current = float(baseline_endpoint_row()["Mtot_28"])
     should_generate = args.rerun_search or not accepted_csv.exists()
     accepted: list[dict[str, float | str]]
     if not should_generate:
         accepted = load_accepted_csv(accepted_csv)
         should_generate = not accepted_csv_matches_current_baseline(accepted, baseline_mtot_current)
         if should_generate:
-            csv_baseline = accepted[0].get("baseline_Mtot_30", "unknown")
+            csv_baseline = accepted[0].get("baseline_Mtot_28", "unknown")
             print(f"Existing accepted-set CSV baseline ({csv_baseline}) does not match current baseline ({baseline_mtot_current:.8g}); regenerating.")
 
     if should_generate:
         accepted, baseline_mtot = generate_accepted_sets(output_dir, args.n_samples, args.n_refine, args.jobs, args.seed, args.tolerance)
         print(f"Generated {len(accepted)} endpoint-equifinal sets at {accepted_csv}.")
     else:
-        baseline_mtot = float(accepted[0]["baseline_Mtot_30"])
+        baseline_mtot = float(accepted[0]["baseline_Mtot_28"])
         print(f"Loaded {len(accepted)} endpoint-equifinal sets from {accepted_csv}.")
 
     plot_figure(output_dir, accepted, formats)
-    print(f"Baseline Mtot_30={baseline_mtot:.8g}")
+    print(f"Baseline Mtot_28={baseline_mtot:.8g}")
     print(f"Saved outputs to {output_dir}")
 
 
