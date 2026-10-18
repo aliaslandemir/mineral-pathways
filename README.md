@@ -1,4 +1,4 @@
-# ACP-to-HAP Model
+# Mineral competing pathways
 
 Competing-pathway model for osteogenic culture mineralization. The code
 separates matrix-associated mineralization from solution-driven calcium
