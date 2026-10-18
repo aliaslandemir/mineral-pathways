@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 os.environ.setdefault("MPLBACKEND", "Agg")
-os.environ.setdefault("MPLCONFIGDIR", str(Path(tempfile.gettempdir()) / "acptohapmodel-matplotlib"))
+os.environ.setdefault("MPLCONFIGDIR", str(Path(tempfile.gettempdir()) / "mineral-pathways-matplotlib"))
 
 import matplotlib.pyplot as plt
 import numpy as np

@@ -23,7 +23,7 @@ from typing import Iterable
 
 import os
 
-os.environ.setdefault("MPLCONFIGDIR", "/tmp/acptohapmodel-matplotlib")
+os.environ.setdefault("MPLCONFIGDIR", "/tmp/mineral-pathways-matplotlib")
 os.environ.setdefault("MPLBACKEND", "Agg")
 
 import matplotlib

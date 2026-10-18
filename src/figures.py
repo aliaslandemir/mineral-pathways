@@ -26,7 +26,7 @@ import os
 from dataclasses import asdict
 from pathlib import Path
 
-os.environ.setdefault("MPLCONFIGDIR", "/tmp/acptohapmodel-matplotlib")
+os.environ.setdefault("MPLCONFIGDIR", "/tmp/mineral-pathways-matplotlib")
 os.environ.setdefault("MPLBACKEND", "Agg")
 import matplotlib
 
