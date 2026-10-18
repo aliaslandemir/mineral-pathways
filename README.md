@@ -27,7 +27,7 @@ python main.py \
   --jobs 6 \
   --n-runs 100 \
   --seed 42 \
-  --t-end 30 \
+  --t-end 28 \
   --dt 0.05 \
   --media-interval 2 \
   --solver-method RK45 \
