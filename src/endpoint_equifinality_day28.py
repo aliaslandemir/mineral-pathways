@@ -33,6 +33,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.optimize import minimize
 from scipy.stats import qmc, spearmanr
+from src.plot_style import COLORS, configure_publication_style, sequential_shades
 
 from src.model import (
     DEFAULT_OUTPUT_DIR,
@@ -101,20 +102,16 @@ ENDPOINT_DAY = 28.0
 
 
 def configure_style() -> None:
-    plt.rcParams.update(
-        {
-            "font.size": 8.5,
-            "axes.labelsize": 8.5,
-            "axes.titlesize": 9.5,
-            "legend.fontsize": 8,
-            "figure.dpi": 150,
-            "savefig.dpi": 600,
-            "axes.spines.top": False,
-            "axes.spines.right": False,
-            "pdf.fonttype": 42,
-            "ps.fonttype": 42,
-        }
-    )
+    configure_publication_style(**{
+        "font.size": 8.5,
+        "axes.labelsize": 8.5,
+        "axes.titlesize": 9.5,
+        "legend.fontsize": 8,
+        "figure.dpi": 150,
+        "savefig.dpi": 600,
+        "pdf.fonttype": 42,
+        "ps.fonttype": 42,
+    })
 
 
 def log_bounds() -> np.ndarray:
@@ -421,7 +418,7 @@ def style_axes(*axes: plt.Axes) -> None:
         ax.set_facecolor("white")
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
-        ax.grid(color="0.91", linewidth=0.75)
+        ax.grid(color="#E5E5E5", linewidth=0.6)
         ax.set_axisbelow(True)
 
 
@@ -445,7 +442,7 @@ def plot_design_1(output_dir: Path, rows: list[dict[str, float | str]], formats:
     arrays = endpoint_arrays(rows, baseline_row)
     parameter_matrix, labels, x_limits = sorted_log_parameter_matrix(rows)
     rng = np.random.default_rng(8721)
-    matrix_color = "#4C78A8"
+    matrix_color = COLORS["matrix"]
 
     fig = plt.figure(figsize=(7.35, 3.4))
     grid = fig.add_gridspec(1, 2, width_ratios=(0.92, 1.18), wspace=0.42)
@@ -502,7 +499,7 @@ def plot_design_2(output_dir: Path, rows: list[dict[str, float | str]], formats:
     arrays = endpoint_arrays(rows, baseline_row)
     parameter_matrix, labels, x_limits = sorted_log_parameter_matrix(rows)
     order = np.argsort(arrays["fmat"])
-    matrix_color = "#4C78A8"
+    matrix_color = COLORS["matrix"]
 
     fig = plt.figure(figsize=(7.4, 3.55))
     grid = fig.add_gridspec(1, 2, width_ratios=(0.9, 1.1), wspace=0.42)
@@ -511,7 +508,8 @@ def plot_design_2(output_dir: Path, rows: list[dict[str, float | str]], formats:
 
     theta = (0.08 + 0.84 * arrays["fmat"]) * np.pi
     radius = 1.0 + 7.5 * arrays["error"]
-    colors = plt.cm.Blues(0.28 + 0.58 * arrays["fmat"])
+    shades = sequential_shades(COLORS["matrix"], 256)
+    colors = [shades[min(255, int(255 * fraction))] for fraction in arrays["fmat"]]
     ax_a.scatter(theta, radius, s=34, color=colors, alpha=0.78, edgecolor="white", linewidth=0.4)
     baseline_theta = (0.08 + 0.84 * float(arrays["baseline_fmat"])) * np.pi
     ax_a.scatter([baseline_theta], [1.0], s=130, color="black", marker="*", zorder=5)
@@ -529,7 +527,7 @@ def plot_design_2(output_dir: Path, rows: list[dict[str, float | str]], formats:
     ax_a.text(-0.20, 1.07, "A", transform=ax_a.transAxes, fontsize=11, fontweight="bold", va="bottom")
 
     sorted_matrix = parameter_matrix[:, order]
-    image = ax_b.imshow(sorted_matrix, aspect="auto", cmap="RdBu_r", vmin=x_limits[0], vmax=x_limits[1], interpolation="nearest")
+    image = ax_b.imshow(sorted_matrix, aspect="auto", cmap="viridis", vmin=x_limits[0], vmax=x_limits[1], interpolation="nearest")
     ax_b.axvline(int(np.argmin(np.abs(arrays["fmat"][order] - float(arrays["baseline_fmat"])))), color="black", linewidth=1.1)
     ax_b.set_yticks(np.arange(len(labels)), labels)
     ax_b.set_xticks([0, len(order) - 1], [f"{100.0 * arrays['fmat'][order[0]]:.0f}% matrix", f"{100.0 * arrays['fmat'][order[-1]]:.0f}% matrix"])
@@ -550,8 +548,8 @@ def plot_design_3(output_dir: Path, rows: list[dict[str, float | str]], formats:
     arrays = endpoint_arrays(rows, baseline_row)
     parameter_matrix, labels, x_limits = sorted_log_parameter_matrix(rows)
     order = np.argsort(arrays["fmat"])
-    matrix_color = "#2B6CB0"
-    solution_color = "#D98C24"
+    matrix_color = COLORS["matrix"]
+    solution_color = COLORS["Q"]
 
     fig = plt.figure(figsize=(7.45, 3.55))
     grid = fig.add_gridspec(1, 2, width_ratios=(0.95, 1.15), wspace=0.42)
@@ -577,8 +575,9 @@ def plot_design_3(output_dir: Path, rows: list[dict[str, float | str]], formats:
     ax_a.set_title("Pathway stack ribbon", fontweight="bold", pad=7)
 
     parameter_x = np.arange(parameter_matrix.shape[0])
+    shades = sequential_shades(COLORS["matrix"], 256)
     for col in order:
-        color = plt.cm.Blues(0.24 + 0.62 * arrays["fmat"][col])
+        color = shades[min(255, int(255 * arrays["fmat"][col]))]
         ax_b.plot(parameter_x, parameter_matrix[:, col], color=color, alpha=0.32, linewidth=1.0)
     ax_b.plot(parameter_x, np.zeros_like(parameter_x, dtype=float), color="black", linewidth=1.0)
     medians = np.median(parameter_matrix, axis=1)
@@ -603,8 +602,8 @@ def plot_figure(
     configure_style()
     baseline_row = baseline_endpoint_row()
 
-    matrix_color = "#56B4E9"
-    solution_color = "#CC79A7"
+    matrix_color = COLORS["matrix"]
+    solution_color = COLORS["Q"]
     baseline_mtot = float(baseline_row["Mtot_28"])
     parameter_order = ("eta_48h", "K_A", "k_f", "M_mat_max", "K_Q", "k_b", "Q_max")
     parameter_labels = [CSV_DISPLAY_NAMES[name] for name in parameter_order]
@@ -634,7 +633,7 @@ def plot_figure(
 
     band_low = 0.98 * baseline_mtot
     band_high = 1.02 * baseline_mtot
-    band_color = "#E8EEF3"
+    band_color = "#F2F2F2"
     ax_a.axhspan(band_low, band_high, color=band_color, alpha=0.95, linewidth=0, zorder=0)
     ax_a.axhline(band_low, color="0.35", linewidth=0.75, linestyle="--", zorder=1)
     ax_a.axhline(band_high, color="0.35", linewidth=0.75, linestyle="--", zorder=1)
@@ -673,7 +672,7 @@ def plot_figure(
     ax_a.set_title("A  Mineral source", loc="left", fontweight="bold", fontsize=9.0, pad=6)
     ax_a.tick_params(axis="x", labelbottom=False, length=0)
 
-    image = ax_b.imshow(heatmap, aspect="auto", interpolation="nearest", cmap="RdBu_r", vmin=-color_limit, vmax=color_limit, extent=(-0.5, len(column_rows) - 0.5, len(parameter_order) - 0.5, -0.5))
+    image = ax_b.imshow(heatmap, aspect="auto", interpolation="nearest", cmap="viridis", vmin=-color_limit, vmax=color_limit, extent=(-0.5, len(column_rows) - 0.5, len(parameter_order) - 0.5, -0.5))
     ax_b.axvline(baseline_col, color="black", linewidth=0.95, zorder=4)
     ax_b.add_patch(plt.Rectangle((baseline_col - 0.5, -0.5), 1.0, len(parameter_order), fill=False, edgecolor="black", linewidth=0.8, zorder=5))
     ax_b.set_yticks(np.arange(len(parameter_order)), parameter_labels)

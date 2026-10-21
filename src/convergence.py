@@ -22,7 +22,7 @@ from src.model import MineralizationModel, ModelParameters, SimulationSettings
 
 STEPS = (0.10, 0.05, 0.025, 0.0125)
 PLOT_INTERVAL = 0.05  # Output interpolation only; never passed to the ODE or limiter.
-OUTPUT = Path(__file__).resolve().parent / "output" / "convergence"
+OUTPUT = Path(__file__).resolve().parent.parent / "output" / "convergence"
 # The nine Sobol ranges in src/figures.py (figure_07) and paper/sup.tex.
 SOBOL_RANGES = {
     "B_ext": (5.0, 20.0),

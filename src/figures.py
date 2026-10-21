@@ -34,6 +34,7 @@ matplotlib.use(os.environ["MPLBACKEND"], force=True)
 import matplotlib.pyplot as plt
 from matplotlib.colors import BoundaryNorm, ListedColormap
 import numpy as np
+from src.plot_style import COLORS, REGIME_COLORS, configure_publication_style, sequential_shades
 
 from src.analysis import evaluate_parameter_vector, inventory_error, ordered_map, output_metrics, parameter_dict, save_kq_ka_ratio_sweep
 from src.model import (
@@ -66,28 +67,18 @@ FIGURE_STEMS = {
     11: "fig11_KQ_KA_ratio_sensitivity",
 }
 
-COLORS = {
-    "B": "#7A5195", "C": "#0072B2", "P": "#E69F00", "A": "#D55E00",
-    "H": "#009E73", "Q": "#CC79A7", "total": "#222222", "matrix": "#56B4E9",
-}
-
-
 def configure_style() -> None:
-    plt.rcParams.update(
-        {
-            "font.size": 12,
-            "axes.labelsize": 13,
-            "axes.titlesize": 14,
-            "xtick.labelsize": 11,
-            "ytick.labelsize": 11,
-            "legend.fontsize": 11,
-            "legend.title_fontsize": 12,
-            "figure.dpi": 150,
-            "savefig.dpi": 600,
-            "axes.spines.top": False,
-            "axes.spines.right": False,
-        }
-    )
+    configure_publication_style(**{
+        "font.size": 12,
+        "axes.labelsize": 13,
+        "axes.titlesize": 14,
+        "xtick.labelsize": 11,
+        "ytick.labelsize": 11,
+        "legend.fontsize": 11,
+        "legend.title_fontsize": 12,
+        "figure.dpi": 150,
+        "savefig.dpi": 600,
+    })
 
 
 def save_figure(fig: plt.Figure, output_dir: Path, number: int, formats: tuple[str, ...]) -> None:
@@ -125,7 +116,7 @@ def figure_02(output_dir: Path, formats: tuple[str, ...], parameters: ModelParam
     axes[0].set_ylabel("Soluble ion (mM)")
     axes[0].set_title("Soluble calcium and phosphate")
     axes[0].legend(ncol=2)
-    axes[1].plot(result.t, result.S_A, color="#3B528B", label="$S_A$")
+    axes[1].plot(result.t, result.S_A, color=COLORS["A"], label="$S_A$")
     axes[1].plot(result.t, result.S_Q, color=COLORS["Q"], linestyle="-", alpha=0.75, label="$S_Q$")
     axes[1].axhline(1.0, color=COLORS["A"], linestyle="--", label="$S_A=1$")
     axes[1].axhline(1.0, color=COLORS["Q"], linestyle=":", label="$S_Q=1$")
@@ -196,7 +187,7 @@ def figure_03(output_dir: Path, formats: tuple[str, ...], parameters: ModelParam
                 matrix_fraction[i, j] = matrix_endpoint[i, j] / total_endpoint[i, j]
 
     fig, axes = plt.subplots(1, 2, figsize=(10.2, 4.1), sharex=True, sharey=True)
-    regime_cmap = ListedColormap(["#242424", "#4C78A8", "#8E5EA2"])
+    regime_cmap = ListedColormap(REGIME_COLORS)
     axes[0].pcolormesh(beta_values, intervals, regime, cmap=regime_cmap, norm=BoundaryNorm([-0.5, 0.5, 1.5, 2.5], 3), shading="auto")
     handles = [
         plt.Line2D([], [], marker="s", linestyle="", color=regime_cmap(i), markersize=9, label=label)
@@ -204,8 +195,8 @@ def figure_03(output_dir: Path, formats: tuple[str, ...], parameters: ModelParam
     ]
     axes[0].legend(handles=handles, loc="upper left", bbox_to_anchor=(0.01, 0.99), frameon=True, framealpha=0.96, facecolor="white", edgecolor="0.75")
 
-    fraction_cmap = plt.get_cmap("magma").copy()
-    fraction_cmap.set_bad("#242424")
+    fraction_cmap = plt.get_cmap("viridis").copy()
+    fraction_cmap.set_bad(COLORS["reference"])
     im1 = axes[1].pcolormesh(endpoint_beta, endpoint_intervals, np.ma.masked_invalid(matrix_fraction), cmap=fraction_cmap, vmin=0.0, vmax=1.0, shading="auto")
     finite_fraction = np.isfinite(matrix_fraction)
     if np.any(finite_fraction) and np.nanmin(matrix_fraction) <= 0.5 <= np.nanmax(matrix_fraction):
@@ -250,14 +241,14 @@ def figure_04(output_dir: Path, formats: tuple[str, ...], parameters: ModelParam
     keep = representative.reset_status != "pre_reset"
     fig, axes = plt.subplots(1, 3, figsize=(13.0, 4.0), sharex=True, sharey=True)
     log_comp = np.log10(np.maximum(competition, 1.0e-4))
-    im0 = axes[0].pcolormesh(S_grid, F, log_comp, cmap="coolwarm", vmin=-2, vmax=2, shading="auto")
+    im0 = axes[0].pcolormesh(S_grid, F, log_comp, cmap="viridis", vmin=-2, vmax=2, shading="auto")
     axes[0].contour(S_grid, F, competition, levels=[1.0], colors="black", linewidths=1.4)
     fig.colorbar(im0, ax=axes[0], label=r"$\log_{10}(R_b/R_f)$, solution-driven vs matrix-associated")
     im1 = axes[1].pcolormesh(S_grid, F, phi, cmap="viridis", vmin=0, vmax=1, shading="auto")
     axes[1].contour(S_grid, F, phi, levels=[0.1, 0.25, 0.5, 0.75, 0.9], colors="white", linewidths=0.7)
     fig.colorbar(im1, ax=axes[1], label="$Φ_{mat}$, matrix-associated fraction")
     color_values = representative.t[keep]
-    path = axes[2].scatter(representative.S_A[keep], trajectory_occupancy[keep], c=color_values, cmap="plasma", s=5)
+    path = axes[2].scatter(representative.S_A[keep], trajectory_occupancy[keep], c=color_values, cmap="viridis", s=5)
     fig.colorbar(path, ax=axes[2], label="Time (day)")
     axes[2].axvline(bulk_threshold_on_s_a, color="0.3", linestyle=":")
     titles = ("Pathway competition", "Instantaneous matrix-associated fraction", "Baseline trajectory through pathway space")
@@ -298,7 +289,7 @@ def figure_05(output_dir: Path, formats: tuple[str, ...], parameters: ModelParam
     ]
     fig, axes = plt.subplots(2, 2, figsize=(10.0, 7.2))
     titles = ("Final total retained mineral", "Final matrix-associated mineral", "Final solution-driven mineral", "Matrix-associated fraction of retained mineral")
-    colors = (COLORS["total"], COLORS["matrix"], COLORS["Q"], COLORS["H"])
+    colors = (COLORS["total"], COLORS["matrix"], COLORS["Q"], COLORS["matrix"])
     for label, ax, data, title, color in zip("ABCD", axes.flat, values, titles, colors):
         ax.bar(np.arange(len(labels)), data, color=color, alpha=0.85)
         ax.set_xticks(np.arange(len(labels)), labels, rotation=25, ha="right")
@@ -348,6 +339,7 @@ def figure_06(output_dir: Path, formats: tuple[str, ...], parameters: ModelParam
             ax.plot(result.t, result.M_mat, color=color, label=f"{value:g}")
             sweep_rows.append([name, value, result.A[-1], result.H[-1], result.Q[-1], result.M_mat[-1], result.M_tot[-1], result.final_matrix_fraction, np.max(result.S_A)])
         ax.set_title(title)
+        ax.grid(False)
         ax.set_xlabel("Time (day)")
         ax.set_ylabel("$M_{mat}$ (mM P-eq.)")
         ax.legend(title=title, loc="center right", bbox_to_anchor=(0.98, 0.5), frameon=True, framealpha=0.88)
@@ -464,10 +456,12 @@ def figure_07(output_dir: Path, formats: tuple[str, ...], parameters: ModelParam
         st_conf = np.asarray([float(row["ST_conf"]) for row in plot_rows])
 
         fig, ax = plt.subplots(figsize=(7.4, 4.6))
-        ax.bar(x, s1, color="#4C78A8", label="First-order $S_1$")
-        ax.bar(x, interaction, bottom=s1, color="#ECA400", label="Interaction contribution, $S_T-S_1$")
-        ax.errorbar(x, s1, yerr=s1_conf, fmt="none", ecolor="#00A878", elinewidth=1.2, capsize=3, label="$S_1$ 95% CI")
-        ax.errorbar(x, st, yerr=st_conf, fmt="none", ecolor="#B07CC6", elinewidth=1.2, capsize=3, linestyle="--", label="$S_T$ 95% CI")
+        target_color = COLORS["matrix"] if target_name == "terminal M_mat" else COLORS["Q"]
+        interaction_color, first_order_color = sequential_shades(target_color, 2)
+        ax.bar(x, s1, color=first_order_color, label="First-order $S_1$")
+        ax.bar(x, interaction, bottom=s1, color=interaction_color, label="Interaction contribution, $S_T-S_1$")
+        ax.errorbar(x, s1, yerr=s1_conf, fmt="none", ecolor=COLORS["total"], elinewidth=1.2, capsize=3, label="$S_1$ 95% CI")
+        ax.errorbar(x, st, yerr=st_conf, fmt="none", ecolor=COLORS["reference"], elinewidth=1.2, capsize=3, linestyle="--", label="$S_T$ 95% CI")
         ax.set_xticks(x, [display_names[str(row["parameter"])] for row in plot_rows], rotation=25, ha="right")
         ax.set_ylabel("Sobol sensitivity index")
         ax.set_ylim(0, max(1.0, float(np.nanmax(st + st_conf)) * 1.12))
@@ -502,7 +496,7 @@ def figure_08(output_dir: Path, formats: tuple[str, ...], parameters: ModelParam
         ("Q_max", "$Q_{max}$", np.logspace(-2, 1, grid_size)),
         ("M_max", "$M_{mat,max}$", np.logspace(-1, 1, grid_size)),
     ]
-    colors = plt.cm.tab10(np.linspace(0, 1, len(profile_specs)))
+    colors = sequential_shades(COLORS["matrix"], len(profile_specs))
     rows: list[list[float | str]] = []
     profiles: list[dict[str, object]] = []
     for (name, display, values), color in zip(profile_specs, colors):
@@ -576,12 +570,12 @@ def figure_09(output_dir: Path, formats: tuple[str, ...], parameters: ModelParam
     raman_se_norm = raman_se / raman_mean[-1]
 
     fig, axes = plt.subplots(1, 2, figsize=(10.0, 4.0))
-    axes[0].errorbar(ars_days, ars_mean, yerr=ars_se, fmt="o", color=COLORS["P"], label="Published ARS data")
-    axes[0].plot(ars_days, scaled_ars, "-s", color=COLORS["C"], label="Model total retained mineral")
+    axes[0].errorbar(ars_days, ars_mean, yerr=ars_se, fmt="o", color=COLORS["reference"], label="Published ARS data")
+    axes[0].plot(ars_days, scaled_ars, "-s", color=COLORS["total"], label="Model total retained mineral")
     axes[0].set_ylabel("ARS signal (a.u.)")
     axes[0].set_xlabel("Time (day)")
     axes[0].legend()
-    axes[1].errorbar(raman_days, raman_norm, yerr=raman_se_norm, fmt="o", color=COLORS["Q"], label="Published Raman data")
+    axes[1].errorbar(raman_days, raman_norm, yerr=raman_se_norm, fmt="o", color=COLORS["reference"], label="Published Raman data")
     axes[1].plot(raman_days, model_h_norm, "-s", color=COLORS["H"], label="Model matrix-associated apatite")
     axes[1].set_ylabel("Normalized signal")
     axes[1].set_xlabel("Time (day)")
@@ -610,8 +604,8 @@ def figure_10(output_dir: Path, formats: tuple[str, ...], parameters: ModelParam
     axes[1, 0].semilogy(baseline.t, np.maximum(c_error, 1e-16), color=COLORS["C"], label="Calcium")
     axes[1, 0].set_ylabel("Relative within-cycle error")
     axes[1, 0].legend()
-    axes[1, 1].plot(baseline.t, baseline.M_tot, color="black", label="Baseline tolerances")
-    axes[1, 1].plot(tight.t, tight.M_tot, color=COLORS["Q"], linestyle="--", label="Tighter tolerances")
+    axes[1, 1].plot(baseline.t, baseline.M_tot, color=COLORS["total"], label="Baseline tolerances")
+    axes[1, 1].plot(tight.t, tight.M_tot, color=COLORS["total"], linestyle="--", label="Tighter tolerances")
     axes[1, 1].set_ylabel("$M_{tot}$ (mM P-eq.)")
     axes[1, 1].legend()
     for label, ax in zip("ABCD", axes.flat):
