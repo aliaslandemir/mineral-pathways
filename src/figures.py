@@ -551,6 +551,20 @@ def figure_08(output_dir: Path, formats: tuple[str, ...], parameters: ModelParam
 
 
 def figure_09(output_dir: Path, formats: tuple[str, ...], parameters: ModelParameters, settings: SimulationSettings, **_: object) -> None:
+    def normalized_rmse(observed: np.ndarray, predicted: np.ndarray) -> float:
+        """Compare pre-final values after normalizing by the observed final value."""
+        residual = (predicted[:-1] - observed[:-1]) / observed[-1]
+        return float(np.sqrt(np.mean(residual**2)))
+
+    def annotate_rmse(ax: plt.Axes, observed: np.ndarray, predicted: np.ndarray) -> None:
+        rmse = normalized_rmse(observed, predicted)
+        ax.text(
+            0.97, 0.04,
+            f"Normalized RMSE: {rmse:.3f}",
+            transform=ax.transAxes, ha="right", va="bottom", fontsize=9.5,
+            bbox={"boxstyle": "round,pad=0.35", "facecolor": "white", "edgecolor": "0.7", "alpha": 0.94},
+        )
+
     ars_days = np.array([4, 7, 10, 14, 21, 28], dtype=float)
     ars_mean = np.array([2, 4, 5, 12, 15, 30], dtype=float)
     ars_se = np.array([2, 3, 3, 9, 8, 6], dtype=float)
@@ -575,11 +589,13 @@ def figure_09(output_dir: Path, formats: tuple[str, ...], parameters: ModelParam
     axes[0].set_ylabel("ARS signal (a.u.)")
     axes[0].set_xlabel("Time (day)")
     axes[0].legend()
+    annotate_rmse(axes[0], ars_mean, scaled_ars)
     axes[1].errorbar(raman_days, raman_norm, yerr=raman_se_norm, fmt="o", color=COLORS["reference"], label="Published Raman data")
     axes[1].plot(raman_days, model_h_norm, "-s", color=COLORS["H"], label="Model matrix-associated apatite")
     axes[1].set_ylabel("Normalized signal")
     axes[1].set_xlabel("Time (day)")
     axes[1].legend()
+    annotate_rmse(axes[1], raman_norm, model_h_norm)
     for label, ax in zip("AB", axes):
         panel_label(ax, label)
     axes[0].set_title("Alizarin Red mineralization")
