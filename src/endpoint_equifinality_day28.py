@@ -103,10 +103,12 @@ ENDPOINT_DAY = 28.0
 
 def configure_style() -> None:
     configure_publication_style(**{
-        "font.size": 8.5,
-        "axes.labelsize": 8.5,
-        "axes.titlesize": 9.5,
-        "legend.fontsize": 8,
+        "font.size": 11,
+        "axes.labelsize": 13,
+        "axes.titlesize": 14,
+        "xtick.labelsize": 11,
+        "ytick.labelsize": 11,
+        "legend.fontsize": 11,
         "figure.dpi": 150,
         "savefig.dpi": 600,
         "pdf.fonttype": 42,
@@ -649,7 +651,7 @@ def plot_figure(
         transform=ax_a.transAxes,
         ha="right",
         va="center",
-        fontsize=7.2,
+        fontsize=10,
         color="black",
         clip_on=False,
         bbox={"boxstyle": "square,pad=0.14", "facecolor": "white", "edgecolor": "0.75", "alpha": 0.96},
@@ -669,14 +671,14 @@ def plot_figure(
     legend.set_zorder(10)
     ax_a.set_ylabel("Day-28 mineral\n(mM P-eq.)", labelpad=4)
     ax_a.set_ylim(0.0, max(float(np.nanmax(mtot)), 1.02 * baseline_mtot) * 1.12)
-    ax_a.set_title("A  Mineral source", loc="left", fontweight="bold", fontsize=9.0, pad=6)
+    ax_a.set_title("A  Mineral source", loc="left", fontweight="bold", pad=6)
     ax_a.tick_params(axis="x", labelbottom=False, length=0)
 
     image = ax_b.imshow(heatmap, aspect="auto", interpolation="nearest", cmap="viridis", vmin=-color_limit, vmax=color_limit, extent=(-0.5, len(column_rows) - 0.5, len(parameter_order) - 0.5, -0.5))
     ax_b.axvline(baseline_col, color="black", linewidth=0.95, zorder=4)
     ax_b.add_patch(plt.Rectangle((baseline_col - 0.5, -0.5), 1.0, len(parameter_order), fill=False, edgecolor="black", linewidth=0.8, zorder=5))
     ax_b.set_yticks(np.arange(len(parameter_order)), parameter_labels)
-    ax_b.set_title("B  Parameter changes", loc="left", fontweight="bold", fontsize=9.0, pad=6)
+    ax_b.set_title("B  Parameter changes", loc="left", fontweight="bold", pad=6)
     ax_b.set_xlabel("Accepted sets ordered by matrix fraction")
 
     tick_positions = [0, baseline_col, len(column_rows) - 1]
@@ -694,8 +696,8 @@ def plot_figure(
         ax_b.axhline(boundary, color="white", linewidth=0.55, alpha=0.75, zorder=3)
 
     cbar = fig.colorbar(image, cax=cax)
-    cbar.set_label("Change vs baseline", fontsize=7.5)
-    cbar.ax.tick_params(labelsize=7)
+    cbar.set_label("Change vs baseline", fontsize=11)
+    cbar.ax.tick_params(labelsize=10)
     ax_b.xaxis.labelpad = 10
     fig.subplots_adjust(top=0.93, bottom=0.18, left=0.10, right=0.965)
 
