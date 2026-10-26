@@ -353,6 +353,50 @@ def figure_06(output_dir: Path, formats: tuple[str, ...], parameters: ModelParam
         writer.writerows(sweep_rows)
 
 
+def render_sobol_figure(
+    target_rows: list[dict[str, float | str]],
+    target_name: str,
+    stem: str,
+    title: str,
+    display_names: dict[str, str],
+    output_dir: Path,
+    formats: tuple[str, ...],
+) -> None:
+    target_rows.sort(key=lambda row: float(row["ST"]), reverse=True)
+    plot_rows = target_rows[:5]
+    x = np.arange(len(plot_rows))
+    s1 = np.asarray([max(float(row["S1"]), 0.0) for row in plot_rows])
+    st = np.asarray([max(float(row["ST"]), 0.0) for row in plot_rows])
+    interaction = np.maximum(st - s1, 0.0)
+    s1_conf = np.asarray([float(row["S1_conf"]) for row in plot_rows])
+    st_conf = np.asarray([float(row["ST_conf"]) for row in plot_rows])
+
+    fig, ax = plt.subplots(figsize=(9.0, 5.2))
+    target_color = COLORS["matrix"] if target_name == "terminal M_mat" else COLORS["Q"]
+    interaction_color, first_order_color = sequential_shades(target_color, 2)
+    ax.bar(x, s1, color=first_order_color, label="First-order $S_1$")
+    ax.bar(x, interaction, bottom=s1, color=interaction_color, label="Interaction contribution, $S_T-S_1$")
+    ax.errorbar(x, s1, yerr=s1_conf, fmt="none", ecolor=COLORS["total"], elinewidth=1.2, capsize=3, label="$S_1$ 95% CI")
+    ax.errorbar(x, st, yerr=st_conf, fmt="none", ecolor=COLORS["reference"], elinewidth=1.2, capsize=3, linestyle="--", label="$S_T$ 95% CI")
+    ax.set_xticks(x, [display_names[str(row["parameter"])] for row in plot_rows])
+    ax.tick_params(axis="x", labelsize=16, pad=9)
+    ax.tick_params(axis="y", labelsize=14)
+    ax.set_ylabel("Sobol sensitivity index", fontsize=16)
+    ax.set_ylim(0, max(1.0, float(np.nanmax(st + st_conf)) * 1.12))
+    ax.set_title(title, fontsize=18, pad=14)
+    ax.grid(axis="y", alpha=0.25)
+    ax.legend(loc="upper right", fontsize=13)
+    fig.tight_layout()
+    save_named_figure(fig, output_dir, stem, formats)
+
+    with (output_dir / f"{stem}.csv").open("w", newline="", encoding="utf-8") as handle:
+        fieldnames = ["rank", "parameter", "display_name", "S1", "S1_conf", "ST", "ST_conf", "ST_minus_S1"]
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for rank, row in enumerate(plot_rows, start=1):
+            writer.writerow({"rank": rank, "display_name": display_names[str(row["parameter"])], **{name: row[name] for name in fieldnames if name in row}})
+
+
 def figure_07(output_dir: Path, formats: tuple[str, ...], parameters: ModelParameters, settings: SimulationSettings, sobol_base: int, jobs: int, seed: int, **_: object) -> None:
     from SALib.analyze import sobol as sobol_analyze
     from SALib.sample import sobol as sobol_sample
@@ -446,37 +490,7 @@ def figure_07(output_dir: Path, formats: tuple[str, ...], parameters: ModelParam
     ]
     for target_name, stem, title in targets:
         target_rows = [row for row in sobol_rows if row["output"] == target_name]
-        target_rows.sort(key=lambda row: row["ST"], reverse=True)
-        plot_rows = target_rows[:5]
-        x = np.arange(len(plot_rows))
-        s1 = np.asarray([max(float(row["S1"]), 0.0) for row in plot_rows])
-        st = np.asarray([max(float(row["ST"]), 0.0) for row in plot_rows])
-        interaction = np.maximum(st - s1, 0.0)
-        s1_conf = np.asarray([float(row["S1_conf"]) for row in plot_rows])
-        st_conf = np.asarray([float(row["ST_conf"]) for row in plot_rows])
-
-        fig, ax = plt.subplots(figsize=(7.4, 4.6))
-        target_color = COLORS["matrix"] if target_name == "terminal M_mat" else COLORS["Q"]
-        interaction_color, first_order_color = sequential_shades(target_color, 2)
-        ax.bar(x, s1, color=first_order_color, label="First-order $S_1$")
-        ax.bar(x, interaction, bottom=s1, color=interaction_color, label="Interaction contribution, $S_T-S_1$")
-        ax.errorbar(x, s1, yerr=s1_conf, fmt="none", ecolor=COLORS["total"], elinewidth=1.2, capsize=3, label="$S_1$ 95% CI")
-        ax.errorbar(x, st, yerr=st_conf, fmt="none", ecolor=COLORS["reference"], elinewidth=1.2, capsize=3, linestyle="--", label="$S_T$ 95% CI")
-        ax.set_xticks(x, [display_names[str(row["parameter"])] for row in plot_rows], rotation=25, ha="right")
-        ax.set_ylabel("Sobol sensitivity index")
-        ax.set_ylim(0, max(1.0, float(np.nanmax(st + st_conf)) * 1.12))
-        ax.set_title(title)
-        ax.grid(axis="y", alpha=0.25)
-        ax.legend(loc="upper right")
-        fig.tight_layout()
-        save_named_figure(fig, output_dir, stem, formats)
-
-        with (output_dir / f"{stem}.csv").open("w", newline="", encoding="utf-8") as handle:
-            fieldnames = ["rank", "parameter", "display_name", "S1", "S1_conf", "ST", "ST_conf", "ST_minus_S1"]
-            writer = csv.DictWriter(handle, fieldnames=fieldnames)
-            writer.writeheader()
-            for rank, row in enumerate(plot_rows, start=1):
-                writer.writerow({"rank": rank, "display_name": display_names[str(row["parameter"])], **{name: row[name] for name in fieldnames if name in row}})
+        render_sobol_figure(target_rows, target_name, stem, title, display_names, output_dir, formats)
 
 
 def identifiability_task(task: tuple[dict[str, float], SimulationSettings, np.ndarray]) -> np.ndarray:
